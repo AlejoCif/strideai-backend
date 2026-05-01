@@ -10,6 +10,7 @@ spring:
     hikari:
       connection-timeout: 30000
       maximum-pool-size: 3
+      initialization-fail-timeout: 0
 
   jpa:
     hibernate:
@@ -48,3 +49,9 @@ app:
     api-key: ${ANTHROPIC_API_KEY}
     api-url: https://api.anthropic.com/v1/messages
     model: claude-sonnet-4-20250514
+
+logging:
+  level:
+    org.springframework.jdbc: DEBUG
+    com.zaxxer.hikari: DEBUG
+    org.hibernate.SQL: DEBUG
