@@ -1,0 +1,30 @@
+app:
+  frontend-url: http://localhost:5173
+  strava:
+    client-id: test-client-id
+    client-secret: test-client-secret
+    refresh-token: test-refresh-token
+    api-base-url: https://www.strava.com/api/v3
+    token-url: https://www.strava.com/oauth/token
+  anthropic:
+    api-key: test-api-key
+    api-url: https://api.anthropic.com/v1/messages
+    model: claude-sonnet-4-20250514
+
+spring:
+  security:
+    oauth2:
+      client:
+        registration:
+          strava:
+            client-id: test-client-id
+            client-secret: test-client-secret
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/strava"
+            scope: read
+        provider:
+          strava:
+            authorization-uri: https://www.strava.com/oauth/authorize
+            token-uri: https://www.strava.com/oauth/token
+            user-info-uri: https://www.strava.com/api/v3/athlete
+            user-name-attribute: id
