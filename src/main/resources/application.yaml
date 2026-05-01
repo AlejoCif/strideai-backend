@@ -3,7 +3,7 @@ spring:
     name: strideai-backend
 
   datasource:
-    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/strideai}
+    url: jdbc:postgresql://${PGHOST:localhost}:${PGPORT:5432}/${PGDATABASE:strideai}
     username: ${PGUSER:postgres}
     password: ${PGPASSWORD:postgres}
     driver-class-name: org.postgresql.Driver
