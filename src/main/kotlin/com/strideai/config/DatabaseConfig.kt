@@ -18,7 +18,9 @@ class DatabaseConfig {
         config.connectionTimeout = 30000
         config.maximumPoolSize = 3
 
-        val dbUrl = System.getenv("DATABASE_URL")
+        // Prefer private URL (internal Railway network) over public proxy
+        val dbUrl = System.getenv("DATABASE_PRIVATE_URL")
+            ?: System.getenv("DATABASE_URL")
 
         if (!dbUrl.isNullOrBlank()) {
             try {
@@ -37,8 +39,6 @@ class DatabaseConfig {
                     config.jdbcUrl = "jdbc:postgresql://$host:$port/$database"
                     config.username = userInfo?.getOrNull(0) ?: System.getenv("PGUSER") ?: "postgres"
                     config.password = userInfo?.getOrNull(1) ?: System.getenv("PGPASSWORD") ?: ""
-                    config.addDataSourceProperty("ssl", "true")
-                    config.addDataSourceProperty("sslmode", "require")
                     return HikariDataSource(config)
                 }
             } catch (_: Exception) {
