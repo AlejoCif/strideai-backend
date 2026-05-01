@@ -3,10 +3,13 @@ spring:
     name: strideai-backend
 
   datasource:
-    url: ${DATABASE_URL}
-    username: ${PGUSER:postgres}
-    password: ${PGPASSWORD:postgres}
+    url: jdbc:postgresql://${PGHOST}:${PGPORT}/${PGDATABASE}?sslmode=require
+    username: ${PGUSER}
+    password: ${PGPASSWORD}
     driver-class-name: org.postgresql.Driver
+    hikari:
+      connection-timeout: 30000
+      maximum-pool-size: 3
 
   jpa:
     hibernate:
@@ -15,7 +18,6 @@ spring:
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
-        format_sql: true
 
   security:
     oauth2:
@@ -35,7 +37,7 @@ spring:
             user-name-attribute: id
 
 server:
-  port: ${PORT:3001}
+  port: ${PORT:8080}
 
 app:
   frontend-url: ${FRONTEND_URL:http://localhost:5173}
