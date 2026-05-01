@@ -1,0 +1,22 @@
+# Secrets
+.env
+*.env.local
+
+# Build
+build/
+out/
+
+# Gradle
+.gradle/
+gradle-app.setting
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iws
+*.iml
+*.ipr
+*.DS_Store
+
+# Logs
+*.log
