@@ -118,6 +118,24 @@ data class AnthropicContent(
     val text: String?
 )
 
+// Structured plan returned by POST /api/ai/plan
+data class TrainingPlanData(
+    val plan: List<TrainingDay>,
+    val weekTSS: Int,
+    val focus: String,
+    val recommendations: List<String>
+)
+
+data class TrainingDay(
+    val day: String,
+    val type: String,
+    val label: String,
+    val duration: Int?,
+    val zone: String?,
+    val note: String
+)
+
+// Saved plan record returned by GET /api/ai/plan/latest
 data class TrainingPlanResponse(
     val id: Long,
     val planJson: String,

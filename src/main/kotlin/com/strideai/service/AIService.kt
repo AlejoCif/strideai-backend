@@ -2,6 +2,7 @@ package com.strideai.service
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.strideai.dto.*
+import com.fasterxml.jackson.module.kotlin.readValue
 import com.strideai.model.AiAnalysis
 import com.strideai.model.TrainingPlan
 import com.strideai.repository.AiAnalysisRepository
@@ -51,7 +52,7 @@ class AIService(
 
     // ── Training plan ─────────────────────────────────────────
 
-    fun generatePlan(request: GeneratePlanRequest): String {
+    fun generatePlan(request: GeneratePlanRequest): TrainingPlanData {
         val recentActivities = try {
             stravaService.getRecentActivities(perPage = 20)
                 .map { stravaService.toActivitySummary(it) }
@@ -102,7 +103,13 @@ class AIService(
         }
 
         savePlan(planJson)
-        return planJson
+
+        return try {
+            objectMapper.readValue(planJson, TrainingPlanData::class.java)
+        } catch (e: Exception) {
+            println("Warning: could not parse AI plan JSON: ${e.message}")
+            generateFallbackPlan()
+        }
     }
 
     fun getLatestPlan(): TrainingPlanResponse? {
@@ -257,31 +264,24 @@ class AIService(
         }.trim()
     }
 
-    private fun generateFallbackPlan(): String {
-        val days = listOf("Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom")
-        val sessions = listOf(
-            mapOf("type" to "easy",      "label" to "Rodaje suave",   "duration" to 45, "zone" to "Z2", "note" to "Mantén conversación fácil"),
-            mapOf("type" to "rest",      "label" to "Descanso",        "duration" to null, "zone" to null, "note" to "Recuperación completa"),
-            mapOf("type" to "easy",      "label" to "Trote fácil",    "duration" to 40, "zone" to "Z2", "note" to "Ritmo cómodo"),
-            mapOf("type" to "threshold", "label" to "Series",          "duration" to 50, "zone" to "Z4", "note" to "4×8 min al umbral"),
-            mapOf("type" to "rest",      "label" to "Descanso",        "duration" to null, "zone" to null, "note" to "Recuperación activa o descanso"),
-            mapOf("type" to "long",      "label" to "Fondo",           "duration" to 90, "zone" to "Z2", "note" to "Sin prisa, hidrata bien"),
-            mapOf("type" to "rest",      "label" to "Descanso",        "duration" to null, "zone" to null, "note" to "Descansa y recupera")
+    private fun generateFallbackPlan(): TrainingPlanData = TrainingPlanData(
+        plan = listOf(
+            TrainingDay("Lun", "easy",      "Rodaje suave", 45,   "Z2", "Mantén conversación fácil"),
+            TrainingDay("Mar", "rest",      "Descanso",     null, null, "Recuperación completa"),
+            TrainingDay("Mié", "easy",      "Trote fácil",  40,   "Z2", "Ritmo cómodo"),
+            TrainingDay("Jue", "threshold", "Series",       50,   "Z4", "4×8 min al umbral"),
+            TrainingDay("Vie", "rest",      "Descanso",     null, null, "Recuperación activa o descanso"),
+            TrainingDay("Sáb", "long",      "Fondo",        90,   "Z2", "Sin prisa, hidrata bien"),
+            TrainingDay("Dom", "rest",      "Descanso",     null, null, "Descansa y recupera")
+        ),
+        weekTSS = 180,
+        focus = "Semana de mantenimiento — el asistente IA no está disponible temporalmente",
+        recommendations = listOf(
+            "Mantén una intensidad moderada esta semana.",
+            "Descansa bien y cuida la alimentación.",
+            "Próximamente podrás obtener un plan personalizado con IA."
         )
-
-        val plan = days.mapIndexed { i, day -> mapOf("day" to day) + sessions[i] }
-
-        return objectMapper.writeValueAsString(mapOf(
-            "plan" to plan,
-            "weekTSS" to 180,
-            "focus" to "Semana de mantenimiento — el asistente IA no está disponible temporalmente",
-            "recommendations" to listOf(
-                "Mantén una intensidad moderada esta semana.",
-                "Descansa bien y cuida la alimentación.",
-                "Próximamente podrás obtener un plan personalizado con IA."
-            )
-        ))
-    }
+    )
 
     // ── Helpers ───────────────────────────────────────────────
 

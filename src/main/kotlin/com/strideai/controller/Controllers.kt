@@ -122,10 +122,9 @@ class AIController(private val aiService: AIService) {
     @PostMapping("/plan")
     fun generatePlan(
         @RequestBody request: GeneratePlanRequest
-    ): ResponseEntity<Map<String, Any>> {
+    ): ResponseEntity<Any> {
         return try {
-            val planJson = aiService.generatePlan(request)
-            ResponseEntity.ok(mapOf("plan" to planJson, "success" to true))
+            ResponseEntity.ok(aiService.generatePlan(request))
         } catch (e: Exception) {
             ResponseEntity.internalServerError()
                 .body(mapOf("error" to (e.message ?: "Error generating plan"), "success" to false))
