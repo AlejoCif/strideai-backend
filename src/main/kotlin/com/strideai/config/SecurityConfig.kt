@@ -28,6 +28,7 @@ class SecurityConfig(
                 auth
                     .requestMatchers("/api/health").permitAll()
                     .requestMatchers("/auth/**").permitAll()
+                    .requestMatchers("/login/**", "/oauth2/**").permitAll()
                     .requestMatchers("/api/**").authenticated()
                     .anyRequest().permitAll()
             }

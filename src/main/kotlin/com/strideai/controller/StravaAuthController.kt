@@ -37,6 +37,10 @@ class StravaAuthController(
     private val contextRepository = HttpSessionSecurityContextRepository()
     private val restTemplate = RestTemplate()
 
+    // Backward-compat redirect for old Spring Security OAuth2 URL
+    @GetMapping("/login/oauth2/authorization/strava", "/oauth2/authorization/strava")
+    fun legacyRedirect(): String = "redirect:/auth/strava"
+
     @GetMapping("/auth/strava")
     fun redirectToStrava(): String {
         val scope = URLEncoder.encode("read,activity:read_all,profile:read_all", StandardCharsets.UTF_8)
