@@ -22,8 +22,6 @@ class AIService(
     @Value("\${app.anthropic.api-url}") private lateinit var apiUrl: String
     @Value("\${app.anthropic.model}") private lateinit var model: String
 
-    // ── Chat with AI coach ───────────────────────────────────
-
     fun chat(request: ChatRequest): ChatResponse {
         val recentActivities = try {
             stravaService.getRecentActivities(perPage = 10)
@@ -40,8 +38,6 @@ class AIService(
         val reply = callAnthropic(systemPrompt, messages)
         return ChatResponse(reply = reply)
     }
-
-    // ── Generate weekly training plan ────────────────────────
 
     fun generatePlan(request: GeneratePlanRequest): String {
         val recentActivities = try {
@@ -70,25 +66,24 @@ class AIService(
             - TSB estimado: ${tsb.toInt()} pts
             - TSS semana actual: $weeklyTss pts
             - Actividades recientes: ${recentActivities.take(5).joinToString { "${it.type} ${it.distanceKm}km" }}
-            ${if (request.goal != null) "- Objetivo: ${request.goal}" else ""}
-            ${if (request.weeksToEvent != null) "- Semanas para el evento: ${request.weeksToEvent}" else ""}
+            ${request.goal?.let { "- Objetivo: $it" } ?: ""}
+            ${request.weeksToEvent?.let { "- Semanas para el evento: $it" } ?: ""}
 
             Devuelve exactamente este JSON:
             {
               "plan": [
-                {"day":"Lun","type":"rest|easy|interval|threshold|long","label":"nombre sesión","duration":minutos_o_null,"zone":"Z1|Z2|Z3|Z4|Z5|null","note":"consejo corto"},
-                ... (7 días, Lun a Dom)
+                {"day":"Lun","type":"rest|easy|interval|threshold|long","label":"nombre sesión","duration":minutos_o_null,"zone":"Z1|Z2|Z3|Z4|Z5|null","note":"consejo corto"}
               ],
               "weekTSS": numero_entero,
               "focus": "frase objetivo de la semana en español",
               "recommendations": ["tip1","tip2","tip3"]
             }
+
+            Importante: incluye exactamente 7 objetos en "plan", de Lun a Dom.
         """.trimIndent()
 
         val planJson = callAnthropic(systemPrompt, listOf(ChatMessage(role = "user", content = userMessage)))
-
         savePlan(planJson)
-
         return planJson
     }
 
@@ -104,37 +99,50 @@ class AIService(
         )
     }
 
-    // ── Analyze performance ──────────────────────────────────
-
     fun analyzePerformance(): String {
         val activities = try {
             stravaService.getRecentActivities(perPage = 20)
                 .map { stravaService.toActivitySummary(it) }
         } catch (e: Exception) {
+            println("Error loading Strava activities for analysis: ${e.message}")
             return "No se pudieron cargar las actividades de Strava."
+        }
+
+        if (activities.isEmpty()) {
+            return "No hay actividades suficientes para generar un análisis. Sincroniza tus actividades de Strava primero."
+        }
+
+        val activityLines = activities.take(10).joinToString("\n") {
+            "- ${it.date}: ${it.type}, ${it.distanceKm} km, ${it.movingTimeFormatted}, " +
+                    "TSS: ${it.tss ?: 0}, FC media: ${it.avgHeartrate?.toInt()?.toString() ?: "N/A"} bpm, " +
+                    "Potencia media: ${it.avgWatts?.toInt()?.toString() ?: "N/A"} W"
         }
 
         val systemPrompt = """
             Eres un entrenador deportivo de élite especializado en análisis de rendimiento.
-            Responde en español, de forma clara y accionable, máximo 4 párrafos cortos.
-            Usa emojis para hacer el análisis más visual y fácil de leer.
+            Responde en español, de forma clara y accionable.
+            Máximo 4 párrafos cortos.
+            Usa emojis con moderación.
+            No uses markdown complejo ni tablas.
         """.trimIndent()
 
         val userMessage = """
             Analiza el rendimiento de este atleta basándote en sus últimas actividades:
-            ${activities.take(10).joinToString("\n") {
-                "- ${it.date}: ${it.type} ${it.distanceKm}km, ${it.movingTimeFormatted}, " +
-                "TSS: ${it.tss}, FC: ${it.avgHeartrate?.toInt() ?: "N/A"} bpm, " +
-                "Potencia: ${it.avgWatts?.toInt() ?: "N/A"}W"
-            }}
 
-            Identifica: tendencias, puntos fuertes, áreas de mejora y 2-3 recomendaciones concretas.
+            $activityLines
+
+            Debes identificar:
+            1. Tendencias recientes.
+            2. Puntos fuertes.
+            3. Áreas de mejora.
+            4. Dos o tres recomendaciones concretas para la próxima semana.
         """.trimIndent()
 
-        return callAnthropic(systemPrompt, listOf(ChatMessage(role = "user", content = userMessage)))
+        return callAnthropic(
+            systemPrompt = systemPrompt,
+            messages = listOf(ChatMessage(role = "user", content = userMessage))
+        )
     }
-
-    // ── Private helpers ──────────────────────────────────────
 
     private fun savePlan(planJson: String) {
         try {
@@ -142,6 +150,7 @@ class AIService(
             val weekTss = tree.get("weekTSS")?.intValue()
             val focus = tree.get("focus")?.textValue()
             val weekStart = LocalDate.now().with(DayOfWeek.MONDAY).toString()
+
             trainingPlanRepository.save(
                 TrainingPlan(
                     userId = 1L,
@@ -157,16 +166,29 @@ class AIService(
     }
 
     private fun callAnthropic(systemPrompt: String, messages: List<ChatMessage>): String {
+        val safeMessages = messages
+            .filter { it.content.isNotBlank() }
+            .map {
+                ChatMessage(
+                    role = if (it.role == "assistant") "assistant" else "user",
+                    content = it.content.trim()
+                )
+            }
+
+        if (safeMessages.isEmpty()) {
+            throw RuntimeException("Cannot call Anthropic with empty messages")
+        }
+
         val requestBody = AnthropicRequest(
             model = model,
             max_tokens = 1500,
-            system = systemPrompt,
-            messages = messages
+            system = systemPrompt.trim(),
+            messages = safeMessages
         )
 
         val response = webClient.post()
             .uri(apiUrl)
-            .header("x-api-key", apiKey)
+            .header("x-api-key", apiKey.trim())
             .header("anthropic-version", "2023-06-01")
             .bodyValue(requestBody)
             .retrieve()
@@ -185,18 +207,18 @@ class AIService(
             Eres un entrenador deportivo de élite personalizado. Conoces los datos reales del atleta.
 
             DATOS DEL ATLETA:
-            - CTL estimado: ${ctlEstimate.toInt()} pts (forma física)
+            - CTL estimado: ${ctlEstimate.toInt()} pts
             - TSS esta semana: $weekTss pts
             - Últimas actividades:
             ${activities.take(6).joinToString("\n") {
-                "  • ${it.date} ${it.type}: ${it.distanceKm}km, ${it.movingTimeFormatted}, TSS ${it.tss}"
-            }}
+            "  • ${it.date} ${it.type}: ${it.distanceKm}km, ${it.movingTimeFormatted}, TSS ${it.tss ?: 0}"
+        }}
 
             INSTRUCCIONES:
-            - Responde en español, tono motivador pero directo
-            - Usa los datos reales para personalizar cada respuesta
-            - Sé conciso: máximo 3 párrafos
-            - Si preguntan sobre nutrición, hidratación o lesiones, recomienda consultar un profesional
+            - Responde en español, tono motivador pero directo.
+            - Usa los datos reales para personalizar cada respuesta.
+            - Sé conciso: máximo 3 párrafos.
+            - Si preguntan sobre nutrición, hidratación o lesiones, recomienda consultar un profesional.
         """.trimIndent()
     }
 }
