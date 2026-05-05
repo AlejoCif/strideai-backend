@@ -10,6 +10,7 @@ import org.springframework.web.reactive.function.client.WebClient
 import org.springframework.web.reactive.function.client.bodyToMono
 import java.time.DayOfWeek
 import java.time.LocalDate
+import org.springframework.web.reactive.function.client.WebClientResponseException
 
 @Service
 class AIService(
@@ -186,14 +187,21 @@ class AIService(
             messages = safeMessages
         )
 
-        val response = webClient.post()
-            .uri(apiUrl)
-            .header("x-api-key", apiKey.trim())
-            .header("anthropic-version", "2023-06-01")
-            .bodyValue(requestBody)
-            .retrieve()
-            .bodyToMono(AnthropicResponse::class.java)
-            .block() ?: throw RuntimeException("No response from Anthropic")
+        val response = try {
+            webClient.post()
+                .uri(apiUrl)
+                .header("x-api-key", apiKey.trim())
+                .header("anthropic-version", "2023-06-01")
+                .bodyValue(requestBody)
+                .retrieve()
+                .bodyToMono(AnthropicResponse::class.java)
+                .block()
+        } catch (e: WebClientResponseException) {
+            println("ANTHROPIC ERROR STATUS=${e.statusCode}")
+            println("ANTHROPIC ERROR BODY=${e.responseBodyAsString}")
+            println("ANTHROPIC REQUEST=${objectMapper.writeValueAsString(requestBody)}")
+            throw e
+        } ?: throw RuntimeException("No response from Anthropic")
 
         return response.content.firstOrNull()?.text
             ?: throw RuntimeException("Empty response from Anthropic")
