@@ -25,7 +25,7 @@ spring:
             client-id: ${STRAVA_CLIENT_ID}
             client-secret: ${STRAVA_CLIENT_SECRET}
             authorization-grant-type: authorization_code
-            redirect-uri: "{baseUrl}/login/oauth2/code/strava"
+            redirect-uri: "https://strideai-backend-production.up.railway.app/login/oauth2/code/strava"
             scope: read,activity:read_all,profile:read_all
         provider:
           strava:
