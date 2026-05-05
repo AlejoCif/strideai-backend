@@ -8,9 +8,6 @@ import com.strideai.repository.AiAnalysisRepository
 import com.strideai.repository.TrainingPlanRepository
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
-import org.springframework.web.reactive.function.client.WebClient
-import org.springframework.web.reactive.function.client.WebClientResponseException
-import org.springframework.web.reactive.function.client.bodyToMono
 import java.security.MessageDigest
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -18,15 +15,14 @@ import kotlin.math.roundToInt
 
 @Service
 class AIService(
-    private val webClient: WebClient,
+    private val anthropicProvider: AnthropicAIProvider,
+    private val openAIProvider: OpenAIProvider,
     private val stravaService: StravaService,
     private val trainingPlanRepository: TrainingPlanRepository,
     private val aiAnalysisRepository: AiAnalysisRepository,
     private val objectMapper: ObjectMapper
 ) {
-    @Value("\${app.anthropic.api-key}") private lateinit var apiKey: String
-    @Value("\${app.anthropic.api-url}") private lateinit var apiUrl: String
-    @Value("\${app.anthropic.model}") private lateinit var model: String
+    @Value("\${app.ai.provider}") private lateinit var aiProviderName: String
 
     // ── Chat ─────────────────────────────────────────────────
 
@@ -42,7 +38,14 @@ class AIService(
         val messages = request.conversationHistory.toMutableList()
         messages.add(ChatMessage(role = "user", content = request.message))
 
-        val reply = callAnthropic(systemPrompt, messages)
+        val reply = try {
+            callAI(systemPrompt, messages)
+        } catch (e: RuntimeException) {
+            if (e.message == "AI_UNAVAILABLE") {
+                return ChatResponse("⚠️ El entrenador IA no está disponible temporalmente. Intenta más tarde.")
+            }
+            throw e
+        }
         return ChatResponse(reply = reply)
     }
 
@@ -91,7 +94,13 @@ class AIService(
             Importante: incluye exactamente 7 objetos en "plan", de Lun a Dom.
         """.trimIndent()
 
-        val planJson = callAnthropic(systemPrompt, listOf(ChatMessage(role = "user", content = userMessage)))
+        val planJson = try {
+            callAI(systemPrompt, listOf(ChatMessage(role = "user", content = userMessage)))
+        } catch (e: RuntimeException) {
+            if (e.message == "AI_UNAVAILABLE") return generateFallbackPlan()
+            throw e
+        }
+
         savePlan(planJson)
         return planJson
     }
@@ -108,7 +117,7 @@ class AIService(
         )
     }
 
-    // ── Performance analysis (cache + AI fallback) ────────────
+    // ── Performance analysis (cache + provider + local fallback) ─
 
     fun analyzePerformance(): String {
         val activities = try {
@@ -158,7 +167,7 @@ class AIService(
         """.trimIndent()
 
         val analysis = try {
-            callAnthropic(systemPrompt, listOf(ChatMessage(role = "user", content = userMessage)))
+            callAI(systemPrompt, listOf(ChatMessage(role = "user", content = userMessage)))
         } catch (e: RuntimeException) {
             if (e.message == "AI_UNAVAILABLE") {
                 return generateFallbackAnalysis(activities)
@@ -173,19 +182,30 @@ class AIService(
         return analysis
     }
 
-    // ── Fallback analysis (local, no AI) ──────────────────────
+    // ── Provider selection ────────────────────────────────────
+
+    private fun callAI(
+        systemPrompt: String,
+        messages: List<ChatMessage>,
+        maxTokens: Int = 1500
+    ): String {
+        val provider: AIProvider = when (aiProviderName.lowercase().trim()) {
+            "openai" -> openAIProvider
+            else -> anthropicProvider
+        }
+        return provider.generate(systemPrompt, messages, maxTokens)
+    }
+
+    // ── Local fallbacks ───────────────────────────────────────
 
     private fun generateFallbackAnalysis(activities: List<ActivitySummary>): String {
-        if (activities.isEmpty()) {
-            return "No hay suficientes actividades para generar análisis."
-        }
+        if (activities.isEmpty()) return "No hay suficientes actividades para generar análisis."
 
         val week = activities.take(7)
         val totalKm = week.sumOf { it.distanceKm }
         val totalTss = week.sumOf { it.tss ?: 0 }
-        val avgHr = week.mapNotNull { it.avgHeartrate }.let { hrs ->
-            if (hrs.isEmpty()) null else hrs.average().roundToInt()
-        }
+        val avgHr = week.mapNotNull { it.avgHeartrate }
+            .let { hrs -> if (hrs.isEmpty()) null else hrs.average().roundToInt() }
 
         val trend = when {
             totalTss > 400 -> "alto"
@@ -237,7 +257,33 @@ class AIService(
         }.trim()
     }
 
-    // ── Private helpers ───────────────────────────────────────
+    private fun generateFallbackPlan(): String {
+        val days = listOf("Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom")
+        val sessions = listOf(
+            mapOf("type" to "easy",      "label" to "Rodaje suave",   "duration" to 45, "zone" to "Z2", "note" to "Mantén conversación fácil"),
+            mapOf("type" to "rest",      "label" to "Descanso",        "duration" to null, "zone" to null, "note" to "Recuperación completa"),
+            mapOf("type" to "easy",      "label" to "Trote fácil",    "duration" to 40, "zone" to "Z2", "note" to "Ritmo cómodo"),
+            mapOf("type" to "threshold", "label" to "Series",          "duration" to 50, "zone" to "Z4", "note" to "4×8 min al umbral"),
+            mapOf("type" to "rest",      "label" to "Descanso",        "duration" to null, "zone" to null, "note" to "Recuperación activa o descanso"),
+            mapOf("type" to "long",      "label" to "Fondo",           "duration" to 90, "zone" to "Z2", "note" to "Sin prisa, hidrata bien"),
+            mapOf("type" to "rest",      "label" to "Descanso",        "duration" to null, "zone" to null, "note" to "Descansa y recupera")
+        )
+
+        val plan = days.mapIndexed { i, day -> mapOf("day" to day) + sessions[i] }
+
+        return objectMapper.writeValueAsString(mapOf(
+            "plan" to plan,
+            "weekTSS" to 180,
+            "focus" to "Semana de mantenimiento — el asistente IA no está disponible temporalmente",
+            "recommendations" to listOf(
+                "Mantén una intensidad moderada esta semana.",
+                "Descansa bien y cuida la alimentación.",
+                "Próximamente podrás obtener un plan personalizado con IA."
+            )
+        ))
+    }
+
+    // ── Helpers ───────────────────────────────────────────────
 
     private fun buildActivitiesHash(activities: List<ActivitySummary>): String {
         val data = activities.joinToString("|") {
@@ -267,53 +313,6 @@ class AIService(
         } catch (e: Exception) {
             println("Warning: could not save training plan: ${e.message}")
         }
-    }
-
-    private fun callAnthropic(systemPrompt: String, messages: List<ChatMessage>): String {
-        val safeMessages = messages
-            .filter { it.content.isNotBlank() }
-            .map {
-                ChatMessage(
-                    role = if (it.role == "assistant") "assistant" else "user",
-                    content = it.content.trim()
-                )
-            }
-
-        if (safeMessages.isEmpty()) {
-            throw RuntimeException("Cannot call Anthropic with empty messages")
-        }
-
-        val requestBody = AnthropicRequest(
-            model = model,
-            max_tokens = 1500,
-            system = systemPrompt.trim(),
-            messages = safeMessages
-        )
-
-        val response = try {
-            webClient.post()
-                .uri(apiUrl)
-                .header("x-api-key", apiKey.trim())
-                .header("anthropic-version", "2023-06-01")
-                .bodyValue(requestBody)
-                .retrieve()
-                .bodyToMono(AnthropicResponse::class.java)
-                .block()
-        } catch (e: WebClientResponseException) {
-            val body = e.responseBodyAsString
-            println("ANTHROPIC ERROR STATUS=${e.statusCode}")
-            println("ANTHROPIC ERROR BODY=$body")
-            println("ANTHROPIC REQUEST=${objectMapper.writeValueAsString(requestBody)}")
-            if (body.contains("credit balance", ignoreCase = true) ||
-                body.contains("rate_limit", ignoreCase = true)
-            ) {
-                throw RuntimeException("AI_UNAVAILABLE")
-            }
-            throw e
-        } ?: throw RuntimeException("No response from Anthropic")
-
-        return response.content.firstOrNull()?.text
-            ?: throw RuntimeException("Empty response from Anthropic")
     }
 
     private fun buildCoachSystemPrompt(activities: List<ActivitySummary>): String {
