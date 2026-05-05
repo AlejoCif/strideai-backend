@@ -2,6 +2,7 @@ package com.strideai.model
 
 import jakarta.persistence.*
 import java.time.Instant
+import java.time.LocalDateTime
 
 @Entity
 @Table(name = "users")
@@ -19,7 +20,6 @@ data class User(
     val city: String? = null,
     val country: String? = null,
 
-    // Strava tokens
     var accessToken: String,
     var refreshToken: String,
     var tokenExpiresAt: Long,
@@ -82,4 +82,21 @@ data class TrainingPlan(
     val focus: String? = null,
 
     val createdAt: Instant = Instant.now()
+)
+
+@Entity
+@Table(name = "ai_analyses")
+data class AiAnalysis(
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    val id: Long = 0,
+
+    val userId: Long,
+
+    @Column(columnDefinition = "TEXT")
+    val content: String,
+
+    val activitiesHash: String,
+
+    val createdAt: LocalDateTime = LocalDateTime.now()
 )

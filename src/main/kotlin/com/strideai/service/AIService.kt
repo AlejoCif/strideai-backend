@@ -2,26 +2,35 @@ package com.strideai.service
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.strideai.dto.*
+import com.strideai.model.AiAnalysis
 import com.strideai.model.TrainingPlan
+import com.strideai.repository.AiAnalysisRepository
 import com.strideai.repository.TrainingPlanRepository
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
 import org.springframework.web.reactive.function.client.WebClient
+import org.springframework.web.reactive.function.client.WebClientResponseException
 import org.springframework.web.reactive.function.client.bodyToMono
+import java.security.MessageDigest
 import java.time.DayOfWeek
 import java.time.LocalDate
-import org.springframework.web.reactive.function.client.WebClientResponseException
+
+private const val LOW_CREDITS_MSG =
+    "⚠️ El análisis IA no está disponible temporalmente por límite de créditos. Intenta más tarde."
 
 @Service
 class AIService(
     private val webClient: WebClient,
     private val stravaService: StravaService,
     private val trainingPlanRepository: TrainingPlanRepository,
+    private val aiAnalysisRepository: AiAnalysisRepository,
     private val objectMapper: ObjectMapper
 ) {
     @Value("\${app.anthropic.api-key}") private lateinit var apiKey: String
     @Value("\${app.anthropic.api-url}") private lateinit var apiUrl: String
     @Value("\${app.anthropic.model}") private lateinit var model: String
+
+    // ── Chat ─────────────────────────────────────────────────
 
     fun chat(request: ChatRequest): ChatResponse {
         val recentActivities = try {
@@ -32,13 +41,14 @@ class AIService(
         }
 
         val systemPrompt = buildCoachSystemPrompt(recentActivities)
-
         val messages = request.conversationHistory.toMutableList()
         messages.add(ChatMessage(role = "user", content = request.message))
 
         val reply = callAnthropic(systemPrompt, messages)
         return ChatResponse(reply = reply)
     }
+
+    // ── Training plan ─────────────────────────────────────────
 
     fun generatePlan(request: GeneratePlanRequest): String {
         val recentActivities = try {
@@ -100,23 +110,34 @@ class AIService(
         )
     }
 
+    // ── Performance analysis (with cache) ────────────────────
+
     fun analyzePerformance(): String {
         val activities = try {
             stravaService.getRecentActivities(perPage = 20)
                 .map { stravaService.toActivitySummary(it) }
         } catch (e: Exception) {
-            println("Error loading Strava activities for analysis: ${e.message}")
             return "No se pudieron cargar las actividades de Strava."
         }
 
         if (activities.isEmpty()) {
-            return "No hay actividades suficientes para generar un análisis. Sincroniza tus actividades de Strava primero."
+            return "No hay actividades suficientes para generar un análisis. " +
+                "Sincroniza tus actividades de Strava primero."
+        }
+
+        val userId = 1L
+        val hash = buildActivitiesHash(activities.take(10))
+
+        // Return cached analysis if activities haven't changed
+        val cached = aiAnalysisRepository.findFirstByUserIdOrderByCreatedAtDesc(userId)
+        if (cached != null && cached.activitiesHash == hash) {
+            return cached.content
         }
 
         val activityLines = activities.take(10).joinToString("\n") {
             "- ${it.date}: ${it.type}, ${it.distanceKm} km, ${it.movingTimeFormatted}, " +
-                    "TSS: ${it.tss ?: 0}, FC media: ${it.avgHeartrate?.toInt()?.toString() ?: "N/A"} bpm, " +
-                    "Potencia media: ${it.avgWatts?.toInt()?.toString() ?: "N/A"} W"
+                "TSS: ${it.tss ?: 0}, FC media: ${it.avgHeartrate?.toInt()?.toString() ?: "N/A"} bpm, " +
+                "Potencia media: ${it.avgWatts?.toInt()?.toString() ?: "N/A"} W"
         }
 
         val systemPrompt = """
@@ -139,10 +160,36 @@ class AIService(
             4. Dos o tres recomendaciones concretas para la próxima semana.
         """.trimIndent()
 
-        return callAnthropic(
-            systemPrompt = systemPrompt,
-            messages = listOf(ChatMessage(role = "user", content = userMessage))
+        val analysis = try {
+            callAnthropic(systemPrompt, listOf(ChatMessage(role = "user", content = userMessage)))
+        } catch (e: WebClientResponseException) {
+            if (e.responseBodyAsString.contains("credit balance is too low", ignoreCase = true)) {
+                return LOW_CREDITS_MSG
+            }
+            throw e
+        } catch (e: Exception) {
+            if (e.message?.contains("credit balance is too low", ignoreCase = true) == true) {
+                return LOW_CREDITS_MSG
+            }
+            throw e
+        }
+
+        aiAnalysisRepository.save(
+            AiAnalysis(userId = userId, content = analysis, activitiesHash = hash)
         )
+
+        return analysis
+    }
+
+    // ── Private helpers ───────────────────────────────────────
+
+    private fun buildActivitiesHash(activities: List<ActivitySummary>): String {
+        val data = activities.joinToString("|") {
+            "${it.stravaId}:${it.date}:${it.distanceKm}:${it.tss}"
+        }
+        return MessageDigest.getInstance("SHA-256")
+            .digest(data.toByteArray())
+            .joinToString("") { "%02x".format(it) }
     }
 
     private fun savePlan(planJson: String) {
@@ -197,9 +244,7 @@ class AIService(
                 .bodyToMono(AnthropicResponse::class.java)
                 .block()
         } catch (e: WebClientResponseException) {
-            println("ANTHROPIC ERROR STATUS=${e.statusCode}")
-            println("ANTHROPIC ERROR BODY=${e.responseBodyAsString}")
-            println("ANTHROPIC REQUEST=${objectMapper.writeValueAsString(requestBody)}")
+            println("Anthropic error status=${e.statusCode} body=${e.responseBodyAsString}")
             throw e
         } ?: throw RuntimeException("No response from Anthropic")
 
