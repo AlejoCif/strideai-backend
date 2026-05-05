@@ -14,9 +14,7 @@ import org.springframework.web.reactive.function.client.bodyToMono
 import java.security.MessageDigest
 import java.time.DayOfWeek
 import java.time.LocalDate
-
-private const val LOW_CREDITS_MSG =
-    "⚠️ El análisis IA no está disponible temporalmente por límite de créditos. Intenta más tarde."
+import kotlin.math.roundToInt
 
 @Service
 class AIService(
@@ -110,7 +108,7 @@ class AIService(
         )
     }
 
-    // ── Performance analysis (with cache) ────────────────────
+    // ── Performance analysis (cache + AI fallback) ────────────
 
     fun analyzePerformance(): String {
         val activities = try {
@@ -128,7 +126,6 @@ class AIService(
         val userId = 1L
         val hash = buildActivitiesHash(activities.take(10))
 
-        // Return cached analysis if activities haven't changed
         val cached = aiAnalysisRepository.findFirstByUserIdOrderByCreatedAtDesc(userId)
         if (cached != null && cached.activitiesHash == hash) {
             return cached.content
@@ -162,14 +159,9 @@ class AIService(
 
         val analysis = try {
             callAnthropic(systemPrompt, listOf(ChatMessage(role = "user", content = userMessage)))
-        } catch (e: WebClientResponseException) {
-            if (e.responseBodyAsString.contains("credit balance is too low", ignoreCase = true)) {
-                return LOW_CREDITS_MSG
-            }
-            throw e
-        } catch (e: Exception) {
-            if (e.message?.contains("credit balance is too low", ignoreCase = true) == true) {
-                return LOW_CREDITS_MSG
+        } catch (e: RuntimeException) {
+            if (e.message == "AI_UNAVAILABLE") {
+                return generateFallbackAnalysis(activities)
             }
             throw e
         }
@@ -179,6 +171,70 @@ class AIService(
         )
 
         return analysis
+    }
+
+    // ── Fallback analysis (local, no AI) ──────────────────────
+
+    private fun generateFallbackAnalysis(activities: List<ActivitySummary>): String {
+        if (activities.isEmpty()) {
+            return "No hay suficientes actividades para generar análisis."
+        }
+
+        val week = activities.take(7)
+        val totalKm = week.sumOf { it.distanceKm }
+        val totalTss = week.sumOf { it.tss ?: 0 }
+        val avgHr = week.mapNotNull { it.avgHeartrate }.let { hrs ->
+            if (hrs.isEmpty()) null else hrs.average().roundToInt()
+        }
+
+        val trend = when {
+            totalTss > 400 -> "alto"
+            totalTss > 200 -> "moderado"
+            else -> "bajo"
+        }
+
+        val dominantType = week.groupingBy { it.type }.eachCount()
+            .maxByOrNull { it.value }?.key ?: "variado"
+
+        val strengths = buildList {
+            if (totalKm > 50) add("volumen semanal sólido (${totalKm.roundToInt()} km)")
+            if (totalTss > 300) add("carga de entrenamiento consistente ($totalTss TSS)")
+            if (avgHr != null && avgHr < 150) add("frecuencia cardíaca media controlada ($avgHr bpm)")
+            if (week.size >= 4) add("frecuencia de entrenamiento regular (${week.size} sesiones)")
+        }.ifEmpty { listOf("constancia en el entrenamiento") }
+
+        val improvements = buildList {
+            if (totalKm < 30) add("aumentar el volumen semanal gradualmente")
+            if (totalTss < 150) add("incrementar la carga de entrenamiento")
+            if (avgHr != null && avgHr > 165) add("incluir más trabajo en zona aeróbica baja")
+            if (week.size < 3) add("aumentar la frecuencia semanal de sesiones")
+        }.ifEmpty { listOf("mantener la consistencia y variar los estímulos") }
+
+        val recommendations = buildList {
+            add("Realiza al menos una sesión larga de ${dominantType.lowercase()} a intensidad baja (Z2) esta semana.")
+            if (totalTss > 350) add("Incluye un día de recuperación activa o descanso completo.")
+            else add("Puedes aumentar el volumen un 10% respecto a esta semana.")
+            add("Revisa tu hidratación y sueño para optimizar la recuperación entre sesiones.")
+        }
+
+        return buildString {
+            appendLine("📊 Resumen semanal")
+            appendLine("Distancia total: ${totalKm.roundToInt()} km · TSS acumulado: $totalTss · " +
+                "Sesiones: ${week.size} · Carga: $trend")
+            avgHr?.let { appendLine("Frecuencia cardíaca media: $it bpm") }
+            appendLine()
+
+            appendLine("💪 Puntos fuertes")
+            strengths.forEach { appendLine("• ${it.replaceFirstChar { c -> c.uppercase() }}") }
+            appendLine()
+
+            appendLine("📈 Áreas de mejora")
+            improvements.forEach { appendLine("• ${it.replaceFirstChar { c -> c.uppercase() }}") }
+            appendLine()
+
+            appendLine("✅ Recomendaciones para la próxima semana")
+            recommendations.forEach { appendLine("• $it") }
+        }.trim()
     }
 
     // ── Private helpers ───────────────────────────────────────
@@ -244,7 +300,15 @@ class AIService(
                 .bodyToMono(AnthropicResponse::class.java)
                 .block()
         } catch (e: WebClientResponseException) {
-            println("Anthropic error status=${e.statusCode} body=${e.responseBodyAsString}")
+            val body = e.responseBodyAsString
+            println("ANTHROPIC ERROR STATUS=${e.statusCode}")
+            println("ANTHROPIC ERROR BODY=$body")
+            println("ANTHROPIC REQUEST=${objectMapper.writeValueAsString(requestBody)}")
+            if (body.contains("credit balance", ignoreCase = true) ||
+                body.contains("rate_limit", ignoreCase = true)
+            ) {
+                throw RuntimeException("AI_UNAVAILABLE")
+            }
             throw e
         } ?: throw RuntimeException("No response from Anthropic")
 
