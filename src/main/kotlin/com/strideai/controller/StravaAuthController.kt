@@ -5,20 +5,15 @@ import com.strideai.dto.StravaAthleteDto
 import com.strideai.dto.StravaTokenResponse
 import com.strideai.model.User
 import com.strideai.repository.UserRepository
+import com.strideai.security.JwtService
 import com.strideai.service.StravaService
-import jakarta.servlet.http.HttpServletRequest
-import jakarta.servlet.http.HttpServletResponse
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.*
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken
-import org.springframework.security.core.authority.SimpleGrantedAuthority
-import org.springframework.security.core.context.SecurityContextHolder
-import org.springframework.security.web.context.HttpSessionSecurityContextRepository
 import org.springframework.stereotype.Controller
 import org.springframework.util.LinkedMultiValueMap
 import org.springframework.web.bind.annotation.*
-import org.springframework.web.client.RestTemplate
 import org.springframework.web.client.HttpClientErrorException
+import org.springframework.web.client.RestTemplate
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.time.Instant
@@ -27,6 +22,7 @@ import java.time.Instant
 class StravaAuthController(
     private val userRepository: UserRepository,
     private val stravaService: StravaService,
+    private val jwtService: JwtService,
     private val objectMapper: ObjectMapper
 ) {
     @Value("\${app.strava.client-id}") private lateinit var clientId: String
@@ -34,7 +30,6 @@ class StravaAuthController(
     @Value("\${app.frontend-url}") private lateinit var frontendUrl: String
 
     private val callbackUrl = "https://strideai-backend-production.up.railway.app/auth/strava/callback"
-    private val contextRepository = HttpSessionSecurityContextRepository()
     private val restTemplate = RestTemplate()
 
     // Backward-compat redirect for old Spring Security OAuth2 URL
@@ -52,9 +47,7 @@ class StravaAuthController(
     @GetMapping("/auth/strava/callback")
     fun handleCallback(
         @RequestParam(required = false) code: String?,
-        @RequestParam(required = false) error: String?,
-        request: HttpServletRequest,
-        response: HttpServletResponse
+        @RequestParam(required = false) error: String?
     ): String {
         if (error != null || code == null) {
             return "redirect:$frontendUrl/login?error=${error ?: "access_denied"}"
@@ -73,9 +66,8 @@ class StravaAuthController(
                 tokenResponse.expires_at
             )
 
-            authenticateSession(user.id.toString(), request, response)
-
-            "redirect:$frontendUrl/dashboard"
+            val jwt = jwtService.generateToken(userId = user.id, stravaId = athlete.id)
+            "redirect:$frontendUrl/dashboard?token=$jwt"
         } catch (e: HttpClientErrorException) {
             "redirect:$frontendUrl/login?error=token_exchange_failed"
         } catch (e: Exception) {
@@ -85,11 +77,8 @@ class StravaAuthController(
 
     @PostMapping("/auth/logout")
     @ResponseBody
-    fun logout(request: HttpServletRequest, response: HttpServletResponse): ResponseEntity<Map<String, Boolean>> {
-        request.getSession(false)?.invalidate()
-        SecurityContextHolder.clearContext()
-        return ResponseEntity.ok(mapOf("success" to true))
-    }
+    fun logout(): ResponseEntity<Map<String, Boolean>> =
+        ResponseEntity.ok(mapOf("success" to true))
 
     // ── Private helpers ───────────────────────────────────
 
@@ -133,19 +122,5 @@ class StravaAuthController(
             )
         }
         return userRepository.save(user)
-    }
-
-    private fun authenticateSession(
-        principalId: String,
-        request: HttpServletRequest,
-        response: HttpServletResponse
-    ) {
-        val auth = UsernamePasswordAuthenticationToken(
-            principalId, null, listOf(SimpleGrantedAuthority("ROLE_USER"))
-        )
-        val context = SecurityContextHolder.createEmptyContext()
-        context.authentication = auth
-        contextRepository.saveContext(context, request, response)
-        SecurityContextHolder.setContext(context)
     }
 }
