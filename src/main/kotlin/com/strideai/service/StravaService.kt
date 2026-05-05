@@ -24,6 +24,12 @@ class StravaService(
     private var cachedAccessToken: String? = null
     private var tokenExpiresAt: Long = 0
 
+    fun updateTokenCache(accessToken: String, refreshToken: String, expiresAt: Long) {
+        cachedAccessToken = accessToken
+        defaultRefreshToken = refreshToken
+        tokenExpiresAt = expiresAt
+    }
+
     // ── Token Management ─────────────────────────────────────
 
     fun getValidToken(refreshToken: String = defaultRefreshToken): String {

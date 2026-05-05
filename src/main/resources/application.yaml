@@ -17,23 +17,6 @@ spring:
       ddl-auto: update
     show-sql: false
 
-  security:
-    oauth2:
-      client:
-        registration:
-          strava:
-            client-id: ${STRAVA_CLIENT_ID}
-            client-secret: ${STRAVA_CLIENT_SECRET}
-            authorization-grant-type: authorization_code
-            redirect-uri: "https://strideai-backend-production.up.railway.app/login/oauth2/code/strava"
-            scope: read,activity:read_all,profile:read_all
-        provider:
-          strava:
-            authorization-uri: https://www.strava.com/oauth/authorize
-            token-uri: https://www.strava.com/oauth/token
-            user-info-uri: https://www.strava.com/api/v3/athlete
-            user-name-attribute: id
-
 server:
   port: ${PORT:8080}
 
