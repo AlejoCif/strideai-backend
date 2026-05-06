@@ -116,6 +116,9 @@ class AIService(
     }
 
     fun getLatestPlan(userId: Long): TrainingPlanResponse? {
+        logger.info("getLatestPlan called with userId=$userId")
+        val allPlans = trainingPlanRepository.findAll()
+        logger.info("Total plans in DB: ${allPlans.size}, userIds: ${allPlans.map { it.userId }.distinct()}")
         val plan = trainingPlanRepository.findFirstByUserIdOrderByCreatedAtDesc(userId) ?: return null
         return TrainingPlanResponse(
             id = plan.id,
