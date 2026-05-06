@@ -126,19 +126,17 @@ class AIService(
         }
     }
 
-    fun getLatestPlan(userId: Long): TrainingPlanResponse? {
+    fun getLatestPlan(userId: Long): TrainingPlanData? {
         logger.info("getLatestPlan called with userId=$userId")
-        val allPlans = trainingPlanRepository.findAll()
-        logger.info("Total plans in DB: ${allPlans.size}, userIds: ${allPlans.map { it.userId }.distinct()}")
-        val plan = trainingPlanRepository.findFirstByUserIdOrderByCreatedAtDesc(userId) ?: return null
-        return TrainingPlanResponse(
-            id = plan.id,
-            planJson = plan.planJson,
-            weekTss = plan.weekTss,
-            focus = plan.focus,
-            weekStartDate = plan.weekStartDate,
-            createdAt = plan.createdAt.toString()
-        )
+        val plan = trainingPlanRepository.findFirstByUserIdOrderByCreatedAtDesc(userId)
+            ?: run { logger.info("getLatestPlan: no plan found for userId=$userId"); return null }
+        logger.info("getLatestPlan: found plan id=${plan.id} focus='${plan.focus}'")
+        return try {
+            objectMapper.readValue(plan.planJson, TrainingPlanData::class.java)
+        } catch (e: Exception) {
+            logger.warn("getLatestPlan: could not parse planJson for id=${plan.id}: ${e.message}")
+            null
+        }
     }
 
     // ── Performance analysis (cache + provider + local fallback) ─
