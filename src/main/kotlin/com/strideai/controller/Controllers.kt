@@ -5,6 +5,7 @@ import com.strideai.repository.ActivityRepository
 import com.strideai.service.AIService
 import com.strideai.service.StravaService
 import org.springframework.http.ResponseEntity
+import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.web.bind.annotation.*
 
 // ── Health ────────────────────────────────────────────────
@@ -120,11 +121,9 @@ class AIController(private val aiService: AIService) {
     }
 
     @PostMapping("/plan")
-    fun generatePlan(
-        @RequestBody request: GeneratePlanRequest
-    ): ResponseEntity<Any> {
+    fun generatePlan(@RequestBody request: GeneratePlanRequest): ResponseEntity<Any> {
         return try {
-            ResponseEntity.ok(aiService.generatePlan(request))
+            ResponseEntity.ok(aiService.generatePlan(request, currentUserId()))
         } catch (e: Exception) {
             ResponseEntity.internalServerError()
                 .body(mapOf("error" to (e.message ?: "Error generating plan"), "success" to false))
@@ -133,13 +132,17 @@ class AIController(private val aiService: AIService) {
 
     @GetMapping("/plan/latest")
     fun getLatestPlan(): ResponseEntity<Any> {
-        val plan = aiService.getLatestPlan() ?: return ResponseEntity.notFound().build()
+        val plan = aiService.getLatestPlan(currentUserId())
+            ?: return ResponseEntity.notFound().build()
         return ResponseEntity.ok(plan)
     }
 
     @GetMapping("/analysis")
     fun analyzePerformance(): ResponseEntity<Map<String, String>> {
-        val analysis = aiService.analyzePerformance()
+        val analysis = aiService.analyzePerformance(currentUserId())
         return ResponseEntity.ok(mapOf("analysis" to analysis))
     }
+
+    private fun currentUserId(): Long =
+        SecurityContextHolder.getContext().authentication.principal as Long
 }

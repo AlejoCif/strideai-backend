@@ -7,6 +7,7 @@ import com.strideai.model.AiAnalysis
 import com.strideai.model.TrainingPlan
 import com.strideai.repository.AiAnalysisRepository
 import com.strideai.repository.TrainingPlanRepository
+import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
 import java.security.MessageDigest
@@ -24,6 +25,8 @@ class AIService(
     private val objectMapper: ObjectMapper
 ) {
     @Value("\${app.ai.provider}") private lateinit var aiProviderName: String
+
+    private val logger = LoggerFactory.getLogger(AIService::class.java)
 
     // ── Chat ─────────────────────────────────────────────────
 
@@ -52,7 +55,7 @@ class AIService(
 
     // ── Training plan ─────────────────────────────────────────
 
-    fun generatePlan(request: GeneratePlanRequest): TrainingPlanData {
+    fun generatePlan(request: GeneratePlanRequest, userId: Long): TrainingPlanData {
         val recentActivities = try {
             stravaService.getRecentActivities(perPage = 20)
                 .map { stravaService.toActivitySummary(it) }
@@ -102,18 +105,18 @@ class AIService(
             throw e
         }
 
-        savePlan(planJson)
+        savePlan(planJson, userId)
 
         return try {
             objectMapper.readValue(planJson, TrainingPlanData::class.java)
         } catch (e: Exception) {
-            println("Warning: could not parse AI plan JSON: ${e.message}")
+            logger.warn("Could not parse AI plan JSON: ${e.message}")
             generateFallbackPlan()
         }
     }
 
-    fun getLatestPlan(): TrainingPlanResponse? {
-        val plan = trainingPlanRepository.findFirstByUserIdOrderByCreatedAtDesc(1L) ?: return null
+    fun getLatestPlan(userId: Long): TrainingPlanResponse? {
+        val plan = trainingPlanRepository.findFirstByUserIdOrderByCreatedAtDesc(userId) ?: return null
         return TrainingPlanResponse(
             id = plan.id,
             planJson = plan.planJson,
@@ -126,7 +129,7 @@ class AIService(
 
     // ── Performance analysis (cache + provider + local fallback) ─
 
-    fun analyzePerformance(): String {
+    fun analyzePerformance(userId: Long): String {
         val activities = try {
             stravaService.getRecentActivities(perPage = 20)
                 .map { stravaService.toActivitySummary(it) }
@@ -139,7 +142,6 @@ class AIService(
                 "Sincroniza tus actividades de Strava primero."
         }
 
-        val userId = 1L
         val hash = buildActivitiesHash(activities.take(10))
 
         val cached = aiAnalysisRepository.findFirstByUserIdOrderByCreatedAtDesc(userId)
@@ -294,16 +296,17 @@ class AIService(
             .joinToString("") { "%02x".format(it) }
     }
 
-    private fun savePlan(planJson: String) {
+    private fun savePlan(planJson: String, userId: Long) {
         try {
             val tree = objectMapper.readTree(planJson)
             val weekTss = tree.get("weekTSS")?.intValue()
             val focus = tree.get("focus")?.textValue()
             val weekStart = LocalDate.now().with(DayOfWeek.MONDAY).toString()
 
+            logger.info("Saving plan for userId: $userId")
             trainingPlanRepository.save(
                 TrainingPlan(
-                    userId = 1L,
+                    userId = userId,
                     weekStartDate = weekStart,
                     planJson = planJson,
                     weekTss = weekTss,
@@ -311,7 +314,7 @@ class AIService(
                 )
             )
         } catch (e: Exception) {
-            println("Warning: could not save training plan: ${e.message}")
+            logger.warn("Could not save training plan: ${e.message}")
         }
     }
 

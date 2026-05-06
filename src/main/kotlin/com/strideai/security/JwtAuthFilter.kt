@@ -29,12 +29,15 @@ class JwtAuthFilter(private val jwtService: JwtService) : OncePerRequestFilter()
         if (token != null) {
             val claims = jwtService.validateToken(token)
             if (claims != null) {
-                val auth = UsernamePasswordAuthenticationToken(
-                    claims.subject,
-                    null,
-                    listOf(SimpleGrantedAuthority("ROLE_USER"))
-                )
-                SecurityContextHolder.getContext().authentication = auth
+                val userId = claims.subject.toLongOrNull()
+                if (userId != null) {
+                    val auth = UsernamePasswordAuthenticationToken(
+                        userId,
+                        null,
+                        listOf(SimpleGrantedAuthority("ROLE_USER"))
+                    )
+                    SecurityContextHolder.getContext().authentication = auth
+                }
             }
         }
         chain.doFilter(request, response)
