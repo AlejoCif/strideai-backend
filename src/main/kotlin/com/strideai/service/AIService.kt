@@ -98,10 +98,19 @@ class AIService(
             Importante: incluye exactamente 7 objetos en "plan", de Lun a Dom.
         """.trimIndent()
 
+        logger.info("generatePlan: calling AI for userId=$userId provider=$aiProviderName")
+
         val planJson = try {
-            callAI(systemPrompt, listOf(ChatMessage(role = "user", content = userMessage)))
+            val json = callAI(systemPrompt, listOf(ChatMessage(role = "user", content = userMessage)))
+            logger.info("generatePlan: AI responded OK, length=${json.length}")
+            json
         } catch (e: RuntimeException) {
-            if (e.message == "AI_UNAVAILABLE") return generateFallbackPlan()
+            if (e.message == "AI_UNAVAILABLE") {
+                logger.warn("generatePlan: AI unavailable, saving fallback for userId=$userId")
+                val fallback = generateFallbackPlan()
+                savePlan(objectMapper.writeValueAsString(fallback), userId)
+                return fallback
+            }
             throw e
         }
 
@@ -110,8 +119,10 @@ class AIService(
         return try {
             objectMapper.readValue(planJson, TrainingPlanData::class.java)
         } catch (e: Exception) {
-            logger.warn("Could not parse AI plan JSON: ${e.message}")
-            generateFallbackPlan()
+            logger.warn("generatePlan: could not parse AI JSON (${e.message}), saving fallback")
+            val fallback = generateFallbackPlan()
+            savePlan(objectMapper.writeValueAsString(fallback), userId)
+            fallback
         }
     }
 
@@ -306,8 +317,8 @@ class AIService(
             val focus = tree.get("focus")?.textValue()
             val weekStart = LocalDate.now().with(DayOfWeek.MONDAY).toString()
 
-            logger.info("Saving plan for userId: $userId")
-            trainingPlanRepository.save(
+            logger.info("savePlan: persisting for userId=$userId focus='$focus' weekTss=$weekTss")
+            val saved = trainingPlanRepository.save(
                 TrainingPlan(
                     userId = userId,
                     weekStartDate = weekStart,
@@ -316,8 +327,9 @@ class AIService(
                     focus = focus
                 )
             )
+            logger.info("savePlan: saved with id=${saved.id}")
         } catch (e: Exception) {
-            logger.warn("Could not save training plan: ${e.message}")
+            logger.error("savePlan: FAILED for userId=$userId — ${e.message}")
         }
     }
 
