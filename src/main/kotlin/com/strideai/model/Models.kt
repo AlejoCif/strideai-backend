@@ -80,6 +80,7 @@ data class TrainingPlan(
 
     val weekTss: Int? = null,
     val focus: String? = null,
+    val goal: String? = null,
 
     val createdAt: Instant = Instant.now()
 )

@@ -108,20 +108,20 @@ class AIService(
             if (e.message == "AI_UNAVAILABLE") {
                 logger.warn("generatePlan: AI unavailable, saving fallback for userId=$userId")
                 val fallback = generateFallbackPlan()
-                savePlan(objectMapper.writeValueAsString(fallback), userId)
+                savePlan(objectMapper.writeValueAsString(fallback), userId, request.goal)
                 return fallback
             }
             throw e
         }
 
-        savePlan(planJson, userId)
+        savePlan(planJson, userId, request.goal)
 
         return try {
             objectMapper.readValue(planJson, TrainingPlanData::class.java)
         } catch (e: Exception) {
             logger.warn("generatePlan: could not parse AI JSON (${e.message}), saving fallback")
             val fallback = generateFallbackPlan()
-            savePlan(objectMapper.writeValueAsString(fallback), userId)
+            savePlan(objectMapper.writeValueAsString(fallback), userId, request.goal)
             fallback
         }
     }
@@ -134,7 +134,7 @@ class AIService(
                     val data = objectMapper.readValue(record.planJson, TrainingPlanData::class.java)
                     TrainingPlanSummary(
                         id = record.id,
-                        title = record.focus ?: data.focus,
+                        title = record.goal ?: record.focus ?: data.focus,
                         weekStartDate = record.weekStartDate,
                         weekTSS = record.weekTss ?: data.weekTSS,
                         createdAt = record.createdAt.toString(),
@@ -331,21 +331,22 @@ class AIService(
             .joinToString("") { "%02x".format(it) }
     }
 
-    private fun savePlan(planJson: String, userId: Long) {
+    private fun savePlan(planJson: String, userId: Long, goal: String? = null) {
         try {
             val tree = objectMapper.readTree(planJson)
             val weekTss = tree.get("weekTSS")?.intValue()
             val focus = tree.get("focus")?.textValue()
             val weekStart = LocalDate.now().with(DayOfWeek.MONDAY).toString()
 
-            logger.info("savePlan: persisting for userId=$userId focus='$focus' weekTss=$weekTss")
+            logger.info("savePlan: persisting for userId=$userId goal='$goal' focus='$focus' weekTss=$weekTss")
             val saved = trainingPlanRepository.save(
                 TrainingPlan(
                     userId = userId,
                     weekStartDate = weekStart,
                     planJson = planJson,
                     weekTss = weekTss,
-                    focus = focus
+                    focus = focus,
+                    goal = goal
                 )
             )
             logger.info("savePlan: saved with id=${saved.id}")
