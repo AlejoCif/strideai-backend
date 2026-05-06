@@ -118,6 +118,18 @@ data class AnthropicContent(
     val text: String?
 )
 
+// Plan card for history list — GET /api/ai/plan/history
+data class TrainingPlanSummary(
+    val id: Long,
+    val title: String,
+    val weekStartDate: String,
+    val weekTSS: Int?,
+    val createdAt: String,
+    val plan: List<TrainingDay>,
+    val focus: String,
+    val recommendations: List<String>
+)
+
 // Structured plan returned by POST /api/ai/plan
 data class TrainingPlanData(
     val plan: List<TrainingDay>,

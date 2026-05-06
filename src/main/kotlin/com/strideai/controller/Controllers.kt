@@ -130,6 +130,14 @@ class AIController(private val aiService: AIService) {
         }
     }
 
+    @GetMapping("/plan/history")
+    fun getPlanHistory(
+        @RequestParam(defaultValue = "5") limit: Int
+    ): ResponseEntity<List<Any>> {
+        val plans = aiService.getRecentPlans(currentUserId(), limit.coerceIn(1, 20))
+        return ResponseEntity.ok(plans)
+    }
+
     @GetMapping("/plan/latest")
     fun getLatestPlan(): ResponseEntity<Any> {
         val plan = aiService.getLatestPlan(currentUserId())

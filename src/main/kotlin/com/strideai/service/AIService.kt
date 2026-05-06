@@ -126,6 +126,29 @@ class AIService(
         }
     }
 
+    fun getRecentPlans(userId: Long, limit: Int = 5): List<TrainingPlanSummary> {
+        return trainingPlanRepository.findByUserIdOrderByCreatedAtDesc(userId)
+            .take(limit)
+            .mapNotNull { record ->
+                try {
+                    val data = objectMapper.readValue(record.planJson, TrainingPlanData::class.java)
+                    TrainingPlanSummary(
+                        id = record.id,
+                        title = record.focus ?: data.focus,
+                        weekStartDate = record.weekStartDate,
+                        weekTSS = record.weekTss ?: data.weekTSS,
+                        createdAt = record.createdAt.toString(),
+                        plan = data.plan,
+                        focus = data.focus,
+                        recommendations = data.recommendations
+                    )
+                } catch (e: Exception) {
+                    logger.warn("getRecentPlans: skipping plan id=${record.id}: ${e.message}")
+                    null
+                }
+            }
+    }
+
     fun getLatestPlan(userId: Long): TrainingPlanData? {
         logger.info("getLatestPlan called with userId=$userId")
         val plan = trainingPlanRepository.findFirstByUserIdOrderByCreatedAtDesc(userId)
