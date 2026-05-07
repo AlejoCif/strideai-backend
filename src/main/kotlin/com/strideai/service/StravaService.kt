@@ -174,7 +174,13 @@ class StravaService(
         tss = estimateTss(dto)
     )
 
-    fun toActivity(dto: StravaActivityDto, userId: Long): Activity = Activity(
+    fun toActivity(dto: StravaActivityDto, userId: Long): Activity {
+        logger.info(
+            "Activity ${dto.id} (${dto.sport_type}): " +
+            "kilojoules=${dto.kilojoules}, calories=${dto.calories}, " +
+            "cadence=${dto.average_cadence}, watts=${dto.average_watts}"
+        )
+        return Activity(
         stravaId = dto.id,
         userId = userId,
         name = dto.name,
@@ -199,7 +205,8 @@ class StravaService(
         achievementCount = dto.achievement_count,
         prCount = dto.pr_count,
         sufferScore = dto.suffer_score
-    )
+        )
+    }
 
     // ── Helpers ───────────────────────────────────────────────
 
