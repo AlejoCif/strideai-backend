@@ -21,6 +21,8 @@ interface ActivityRepository : JpaRepository<Activity, Long> {
 
     @Query("SELECT a FROM Activity a WHERE a.userId = :userId ORDER BY a.startDate DESC LIMIT :limit")
     fun findRecentByUserId(userId: Long, limit: Int): List<Activity>
+
+    fun findByStravaId(stravaId: Long): Activity?
 }
 
 @Repository

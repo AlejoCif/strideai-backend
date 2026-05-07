@@ -95,6 +95,28 @@ class ActivitiesController(
         ))
     }
 
+    @PostMapping("/resync")
+    fun resyncActivities(): ResponseEntity<Map<String, Int>> {
+        val userId = SecurityContextHolder.getContext().authentication.principal as Long
+        val stravaActivities = stravaService.getRecentActivities(perPage = 100)
+
+        var inserted = 0
+        var updated = 0
+
+        for (dto in stravaActivities) {
+            val existing = activityRepository.findByStravaId(dto.id)
+            val activity = stravaService.toActivity(dto, userId).let { new ->
+                // Preserve original createdAt when updating
+                if (existing != null) new.copy(createdAt = existing.createdAt)
+                else new
+            }
+            activityRepository.save(activity)
+            if (existing != null) updated++ else inserted++
+        }
+
+        return ResponseEntity.ok(mapOf("synced" to inserted, "updated" to updated))
+    }
+
     @PostMapping("/sync")
     fun syncActivities(): ResponseEntity<SyncResponse> {
         val userId = 1L
