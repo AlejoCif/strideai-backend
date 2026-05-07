@@ -2,9 +2,12 @@ package com.strideai.service
 
 import com.strideai.dto.*
 import com.strideai.model.Activity
+import com.strideai.repository.UserRepository
+import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
 import org.springframework.web.reactive.function.client.WebClient
+import org.springframework.web.reactive.function.client.WebClientResponseException
 import org.springframework.web.reactive.function.client.bodyToMono
 import java.time.Instant
 import java.time.ZonedDateTime
@@ -12,132 +15,189 @@ import kotlin.math.roundToInt
 
 @Service
 class StravaService(
-    private val webClient: WebClient
+    private val webClient: WebClient,
+    private val userRepository: UserRepository
 ) {
     @Value("\${app.strava.client-id}") private lateinit var clientId: String
     @Value("\${app.strava.client-secret}") private lateinit var clientSecret: String
-    @Value("\${app.strava.refresh-token}") private lateinit var defaultRefreshToken: String
     @Value("\${app.strava.api-base-url}") private lateinit var apiBaseUrl: String
     @Value("\${app.strava.token-url}") private lateinit var tokenUrl: String
 
-    // Simple in-memory token cache (for single-user mode)
-    private var cachedAccessToken: String? = null
-    private var tokenExpiresAt: Long = 0
+    private val logger = LoggerFactory.getLogger(StravaService::class.java)
 
+    // In-memory cache — survives multiple requests, cleared on restart.
+    // DB is the source of truth after a server restart.
+    @Volatile private var cachedAccessToken: String? = null
+    @Volatile private var cachedTokenExpiresAt: Long = 0
+
+    // Called from StravaAuthController after OAuth to prime the in-memory cache
+    // without an extra DB read (tokens already persisted by upsertUser).
     fun updateTokenCache(accessToken: String, refreshToken: String, expiresAt: Long) {
         cachedAccessToken = accessToken
-        defaultRefreshToken = refreshToken
-        tokenExpiresAt = expiresAt
+        cachedTokenExpiresAt = expiresAt
     }
 
-    // ── Token Management ─────────────────────────────────────
+    // ── Token management ──────────────────────────────────────
 
-    fun getValidToken(refreshToken: String = defaultRefreshToken): String {
+    /**
+     * Returns a valid access token for [userId].
+     * Reads from DB, refreshes with Strava if expiring, persists new tokens.
+     * Throws RuntimeException("STRAVA_AUTH_REVOKED") if refresh token is invalid.
+     */
+    fun getValidToken(userId: Long): String {
         val now = Instant.now().epochSecond
+        val user = userRepository.findById(userId).orElse(null)
+            ?: throw RuntimeException("User not found: $userId")
 
-        // Return cached token if still valid (5 min buffer)
-        if (cachedAccessToken != null && tokenExpiresAt > now + 300) {
-            return cachedAccessToken!!
+        if (user.tokenExpiresAt > now + 300) {
+            cachedAccessToken = user.accessToken
+            cachedTokenExpiresAt = user.tokenExpiresAt
+            return user.accessToken
         }
 
-        val response = webClient.post()
-            .uri(tokenUrl)
-            .bodyValue(mapOf(
-                "client_id" to clientId,
-                "client_secret" to clientSecret,
-                "refresh_token" to refreshToken,
-                "grant_type" to "refresh_token"
+        logger.info("Strava token expired for userId=$userId, refreshing...")
+        return refreshAndPersist(user.refreshToken, userId)
+    }
+
+    /**
+     * No-arg overload: uses in-memory cache first, then first DB user.
+     * Used by call sites that don't have a userId (e.g. AIService analysis).
+     */
+    fun getValidToken(): String {
+        val now = Instant.now().epochSecond
+        if (cachedAccessToken != null && cachedTokenExpiresAt > now + 300) {
+            return cachedAccessToken!!
+        }
+        val user = userRepository.findAll().firstOrNull()
+            ?: throw RuntimeException("No authenticated Strava user found")
+        return getValidToken(user.id)
+    }
+
+    private fun refreshAndPersist(refreshToken: String, userId: Long): String {
+        val response = try {
+            webClient.post()
+                .uri(tokenUrl)
+                .bodyValue(mapOf(
+                    "client_id" to clientId,
+                    "client_secret" to clientSecret,
+                    "refresh_token" to refreshToken,
+                    "grant_type" to "refresh_token"
+                ))
+                .retrieve()
+                .bodyToMono<StravaTokenResponse>()
+                .block() ?: throw RuntimeException("Empty response from Strava token endpoint")
+        } catch (e: WebClientResponseException) {
+            if (e.statusCode.value() == 401) {
+                logger.error("Strava refresh token revoked for userId=$userId")
+                throw RuntimeException("STRAVA_AUTH_REVOKED")
+            }
+            throw e
+        }
+
+        userRepository.findById(userId).orElse(null)?.let { user ->
+            userRepository.save(user.copy(
+                accessToken = response.access_token,
+                refreshToken = response.refresh_token,
+                tokenExpiresAt = response.expires_at,
+                updatedAt = Instant.now()
             ))
-            .retrieve()
-            .bodyToMono<StravaTokenResponse>()
-            .block() ?: throw RuntimeException("Failed to refresh Strava token")
+        }
 
         cachedAccessToken = response.access_token
-        tokenExpiresAt = response.expires_at
+        cachedTokenExpiresAt = response.expires_at
 
-        println("✅ Strava token refreshed, expires: ${Instant.ofEpochSecond(response.expires_at)}")
-        return cachedAccessToken!!
+        logger.info("Strava token refreshed for userId=$userId, expires: ${Instant.ofEpochSecond(response.expires_at)}")
+        return response.access_token
     }
 
-    // ── Athlete ──────────────────────────────────────────────
+    // ── Strava API calls ──────────────────────────────────────
 
     fun getAthlete(): StravaAthleteDto {
-        val token = getValidToken()
-        return webClient.get()
-            .uri("$apiBaseUrl/athlete")
-            .header("Authorization", "Bearer $token")
-            .retrieve()
-            .bodyToMono<StravaAthleteDto>()
-            .block() ?: throw RuntimeException("Failed to fetch athlete")
+        return try {
+            webClient.get()
+                .uri("$apiBaseUrl/athlete")
+                .header("Authorization", "Bearer ${getValidToken()}")
+                .retrieve()
+                .bodyToMono<StravaAthleteDto>()
+                .block() ?: throw RuntimeException("Failed to fetch athlete")
+        } catch (e: WebClientResponseException) {
+            handleStravaError(e)
+        }
     }
 
-    // ── Activities ───────────────────────────────────────────
-
     fun getRecentActivities(perPage: Int = 30, page: Int = 1): List<StravaActivityDto> {
-        val token = getValidToken()
-        return webClient.get()
-            .uri("$apiBaseUrl/athlete/activities?per_page=$perPage&page=$page")
-            .header("Authorization", "Bearer $token")
-            .retrieve()
-            .bodyToMono<List<StravaActivityDto>>()
-            .block() ?: emptyList()
+        return try {
+            webClient.get()
+                .uri("$apiBaseUrl/athlete/activities?per_page=$perPage&page=$page")
+                .header("Authorization", "Bearer ${getValidToken()}")
+                .retrieve()
+                .bodyToMono<List<StravaActivityDto>>()
+                .block() ?: emptyList()
+        } catch (e: WebClientResponseException) {
+            handleStravaError(e)
+        }
     }
 
     fun getActivitiesSince(epochSeconds: Long): List<StravaActivityDto> {
-        val token = getValidToken()
-        return webClient.get()
-            .uri("$apiBaseUrl/athlete/activities?after=$epochSeconds&per_page=100")
-            .header("Authorization", "Bearer $token")
-            .retrieve()
-            .bodyToMono<List<StravaActivityDto>>()
-            .block() ?: emptyList()
+        return try {
+            webClient.get()
+                .uri("$apiBaseUrl/athlete/activities?after=$epochSeconds&per_page=100")
+                .header("Authorization", "Bearer ${getValidToken()}")
+                .retrieve()
+                .bodyToMono<List<StravaActivityDto>>()
+                .block() ?: emptyList()
+        } catch (e: WebClientResponseException) {
+            handleStravaError(e)
+        }
     }
 
-    // ── Conversions ──────────────────────────────────────────
-
-    fun toActivitySummary(dto: StravaActivityDto): ActivitySummary {
-        return ActivitySummary(
-            stravaId = dto.id,
-            name = dto.name,
-            type = dto.sport_type,
-            date = dto.start_date_local.take(10),
-            distanceKm = (dto.distance / 1000 * 10).roundToInt() / 10.0,
-            movingTimeFormatted = formatSeconds(dto.moving_time),
-            elevationGain = dto.total_elevation_gain,
-            avgHeartrate = dto.average_heartrate,
-            avgWatts = dto.average_watts,
-            tss = estimateTss(dto)
-        )
+    private fun handleStravaError(e: WebClientResponseException): Nothing = when (e.statusCode.value()) {
+        429 -> throw RuntimeException("STRAVA_RATE_LIMITED")
+        401 -> throw RuntimeException("STRAVA_AUTH_REVOKED")
+        else -> throw e
     }
 
-    fun toActivity(dto: StravaActivityDto, userId: Long): Activity {
-        return Activity(
-            stravaId = dto.id,
-            userId = userId,
-            name = dto.name,
-            type = dto.type,
-            sportType = dto.sport_type,
-            distanceMeters = dto.distance,
-            movingTimeSecs = dto.moving_time,
-            elapsedTimeSecs = dto.elapsed_time,
-            totalElevationGain = dto.total_elevation_gain,
-            averageSpeed = dto.average_speed,
-            maxSpeed = dto.max_speed,
-            averageHeartrate = dto.average_heartrate,
-            maxHeartrate = dto.max_heartrate,
-            averageWatts = dto.average_watts,
-            weightedAverageWatts = dto.weighted_average_watts,
-            startDate = ZonedDateTime.parse(dto.start_date).toInstant(),
-            startDateLocal = dto.start_date_local,
-            timezone = dto.timezone,
-            kudosCount = dto.kudos_count,
-            achievementCount = dto.achievement_count,
-            prCount = dto.pr_count,
-            sufferScore = dto.suffer_score
-        )
-    }
+    // ── Conversions ───────────────────────────────────────────
 
-    // ── Helpers ──────────────────────────────────────────────
+    fun toActivitySummary(dto: StravaActivityDto): ActivitySummary = ActivitySummary(
+        stravaId = dto.id,
+        name = dto.name,
+        type = dto.sport_type,
+        date = dto.start_date_local.take(10),
+        distanceKm = (dto.distance / 1000 * 10).roundToInt() / 10.0,
+        movingTimeFormatted = formatSeconds(dto.moving_time),
+        elevationGain = dto.total_elevation_gain,
+        avgHeartrate = dto.average_heartrate,
+        avgWatts = dto.average_watts,
+        tss = estimateTss(dto)
+    )
+
+    fun toActivity(dto: StravaActivityDto, userId: Long): Activity = Activity(
+        stravaId = dto.id,
+        userId = userId,
+        name = dto.name,
+        type = dto.type,
+        sportType = dto.sport_type,
+        distanceMeters = dto.distance,
+        movingTimeSecs = dto.moving_time,
+        elapsedTimeSecs = dto.elapsed_time,
+        totalElevationGain = dto.total_elevation_gain,
+        averageSpeed = dto.average_speed,
+        maxSpeed = dto.max_speed,
+        averageHeartrate = dto.average_heartrate,
+        maxHeartrate = dto.max_heartrate,
+        averageWatts = dto.average_watts,
+        weightedAverageWatts = dto.weighted_average_watts,
+        startDate = ZonedDateTime.parse(dto.start_date).toInstant(),
+        startDateLocal = dto.start_date_local,
+        timezone = dto.timezone,
+        kudosCount = dto.kudos_count,
+        achievementCount = dto.achievement_count,
+        prCount = dto.pr_count,
+        sufferScore = dto.suffer_score
+    )
+
+    // ── Helpers ───────────────────────────────────────────────
 
     private fun formatSeconds(secs: Int): String {
         val h = secs / 3600
@@ -145,35 +205,21 @@ class StravaService(
         return if (h > 0) "${h}h ${m}m" else "${m}m"
     }
 
-    /**
-     * Simplified TSS estimation:
-     * - If power available: TSS ≈ (secs × NP × IF) / (FTP × 3600) × 100
-     * - If HR only: use suffer score or rough estimate
-     * - Fallback: duration-based estimate
-     */
     fun estimateTss(dto: StravaActivityDto): Int {
-        // Use suffer score if available (Strava's own intensity metric)
-        if (dto.suffer_score != null && dto.suffer_score > 0) {
-            return dto.suffer_score
-        }
+        if (dto.suffer_score != null && dto.suffer_score > 0) return dto.suffer_score
 
-        // Power-based TSS (assume FTP = 250W as default)
         if (dto.weighted_average_watts != null && dto.weighted_average_watts > 0) {
             val ftp = 250.0
             val np = dto.weighted_average_watts.toDouble()
             val IF = np / ftp
-            val tss = (dto.moving_time * np * IF) / (ftp * 3600) * 100
-            return tss.roundToInt()
+            return ((dto.moving_time * np * IF) / (ftp * 3600) * 100).roundToInt()
         }
 
-        // HR-based estimate (rough)
         if (dto.average_heartrate != null) {
             val hrRatio = (dto.average_heartrate - 60) / (185 - 60)
-            val hours = dto.moving_time / 3600.0
-            return (hrRatio * hours * 100).roundToInt()
+            return (hrRatio * (dto.moving_time / 3600.0) * 100).roundToInt()
         }
 
-        // Duration fallback: ~50 TSS/hour moderate effort
         return ((dto.moving_time / 3600.0) * 50).roundToInt()
     }
 }

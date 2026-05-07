@@ -36,12 +36,25 @@ class GlobalExceptionHandler {
 
     @ExceptionHandler(RuntimeException::class)
     fun handleRuntimeException(e: RuntimeException): ResponseEntity<ErrorResponse> {
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(
-            ErrorResponse(
-                error = "INTERNAL_ERROR",
-                message = e.message ?: "An unexpected error occurred",
-                timestamp = Instant.now().toString()
+        val (status, error, message) = when (e.message) {
+            "STRAVA_AUTH_REVOKED" -> Triple(
+                HttpStatus.UNAUTHORIZED,
+                "STRAVA_AUTH_REVOKED",
+                "Tu sesión de Strava ha expirado o fue revocada. Por favor vuelve a iniciar sesión."
             )
+            "STRAVA_RATE_LIMITED" -> Triple(
+                HttpStatus.TOO_MANY_REQUESTS,
+                "STRAVA_RATE_LIMITED",
+                "Strava está limitando las solicitudes temporalmente. Intenta de nuevo en 15 minutos."
+            )
+            else -> Triple(
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                "INTERNAL_ERROR",
+                e.message ?: "An unexpected error occurred"
+            )
+        }
+        return ResponseEntity.status(status).body(
+            ErrorResponse(error = error, message = message, timestamp = Instant.now().toString())
         )
     }
 }
