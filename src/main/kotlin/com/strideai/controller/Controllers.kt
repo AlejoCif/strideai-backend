@@ -3,7 +3,9 @@ package com.strideai.controller
 import com.strideai.dto.*
 import com.strideai.repository.ActivityRepository
 import com.strideai.service.AIService
+import com.strideai.service.AiUsageService
 import com.strideai.service.StravaService
+import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.web.bind.annotation.*
@@ -112,13 +114,29 @@ class ActivitiesController(
 
 @RestController
 @RequestMapping("/api/ai")
-class AIController(private val aiService: AIService) {
+class AIController(
+    private val aiService: AIService,
+    private val aiUsageService: AiUsageService
+) {
 
     @PostMapping("/chat")
-    fun chat(@RequestBody request: ChatRequest): ResponseEntity<ChatResponse> {
-        val response = aiService.chat(request)
-        return ResponseEntity.ok(response)
+    fun chat(@RequestBody request: ChatRequest): ResponseEntity<Any> {
+        val userId = currentUserId()
+        if (!aiUsageService.checkAndIncrementChat(userId)) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(
+                mapOf(
+                    "error" to "quota_exceeded",
+                    "message" to "🌙 Has alcanzado el límite de 10 mensajes diarios. Tu cuota se renueva a medianoche.",
+                    "remaining" to 0
+                )
+            )
+        }
+        return ResponseEntity.ok(aiService.chat(request))
     }
+
+    @GetMapping("/usage")
+    fun getUsage(): ResponseEntity<Map<String, Any>> =
+        ResponseEntity.ok(aiUsageService.getUsage(currentUserId()))
 
     @PostMapping("/plan")
     fun generatePlan(@RequestBody request: GeneratePlanRequest): ResponseEntity<Any> {
