@@ -169,6 +169,8 @@ class StravaService(
         elevationGain = dto.total_elevation_gain,
         avgHeartrate = dto.average_heartrate,
         avgWatts = dto.average_watts,
+        avgCadence = dto.average_cadence,
+        calories = dto.calories,
         tss = estimateTss(dto)
     )
 
@@ -188,6 +190,8 @@ class StravaService(
         maxHeartrate = dto.max_heartrate,
         averageWatts = dto.average_watts,
         weightedAverageWatts = dto.weighted_average_watts,
+        averageCadence = dto.average_cadence,
+        calories = dto.calories,
         startDate = ZonedDateTime.parse(dto.start_date).toInstant(),
         startDateLocal = dto.start_date_local,
         timezone = dto.timezone,

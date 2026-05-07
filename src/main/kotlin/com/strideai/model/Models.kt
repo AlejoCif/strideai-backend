@@ -51,6 +51,8 @@ data class Activity(
     val maxHeartrate: Double? = null,
     val averageWatts: Double? = null,
     val weightedAverageWatts: Int? = null,
+    val averageCadence: Double? = null,
+    val calories: Double? = null,
 
     val startDate: Instant,
     val startDateLocal: String,

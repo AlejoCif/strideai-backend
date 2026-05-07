@@ -393,7 +393,9 @@ class AIService(
             - TSS esta semana: $weekTss pts
             - Últimas actividades:
             ${activities.take(6).joinToString("\n") {
-            "  • ${it.date} ${it.type}: ${it.distanceKm}km, ${it.movingTimeFormatted}, TSS ${it.tss ?: 0}"
+            "  • ${it.date} ${it.type}: ${it.distanceKm}km, ${it.movingTimeFormatted}, TSS ${it.tss ?: 0}" +
+                (it.avgCadence?.let { c -> ", cadencia ${c.toInt()} rpm" } ?: "") +
+                (it.calories?.let { k -> ", ${k.toInt()} kcal" } ?: "")
         }}
 
             INSTRUCCIONES:
