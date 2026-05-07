@@ -34,6 +34,7 @@ data class StravaActivityDto(
     val average_watts: Double?,
     val weighted_average_watts: Int?,
     val average_cadence: Double? = null,
+    val kilojoules: Double? = null,
     val calories: Double? = null,
     val device_watts: Boolean? = null,
     val start_date: String,
