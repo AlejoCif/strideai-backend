@@ -4,8 +4,10 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.strideai.dto.*
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.strideai.model.AiAnalysis
+import com.strideai.model.ChatMessage as ChatMessageEntity
 import com.strideai.model.TrainingPlan
 import com.strideai.repository.AiAnalysisRepository
+import com.strideai.repository.ChatMessageRepository
 import com.strideai.repository.TrainingPlanRepository
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
@@ -22,6 +24,7 @@ class AIService(
     private val stravaService: StravaService,
     private val trainingPlanRepository: TrainingPlanRepository,
     private val aiAnalysisRepository: AiAnalysisRepository,
+    private val chatMessageRepository: ChatMessageRepository,
     private val objectMapper: ObjectMapper
 ) {
     @Value("\${app.ai.provider}") private lateinit var aiProviderName: String
@@ -30,7 +33,7 @@ class AIService(
 
     // ── Chat ─────────────────────────────────────────────────
 
-    fun chat(request: ChatRequest): ChatResponse {
+    fun chat(request: ChatRequest, userId: Long): ChatResponse {
         val recentActivities = try {
             stravaService.getRecentActivities(perPage = 10)
                 .map { stravaService.toActivitySummary(it) }
@@ -39,8 +42,18 @@ class AIService(
         }
 
         val systemPrompt = buildCoachSystemPrompt(recentActivities)
-        val messages = request.conversationHistory.toMutableList()
+
+        // Load persistent history from DB (up to 50 messages)
+        val dbHistory = chatMessageRepository.findTop50ByUserIdOrderByCreatedAtAsc(userId)
+            .map { ChatMessage(role = it.role, content = it.content) }
+
+        val messages = dbHistory.toMutableList()
         messages.add(ChatMessage(role = "user", content = request.message))
+
+        // Persist user message
+        chatMessageRepository.save(
+            ChatMessageEntity(userId = userId, role = "user", content = request.message)
+        )
 
         val reply = try {
             callAI(systemPrompt, messages)
@@ -50,8 +63,20 @@ class AIService(
             }
             throw e
         }
+
+        // Persist assistant reply
+        chatMessageRepository.save(
+            ChatMessageEntity(userId = userId, role = "assistant", content = reply)
+        )
+
         return ChatResponse(reply = reply)
     }
+
+    fun getChatHistory(userId: Long): List<Map<String, String>> =
+        chatMessageRepository.findTop50ByUserIdOrderByCreatedAtAsc(userId)
+            .map { mapOf("role" to it.role, "content" to it.content, "createdAt" to it.createdAt.toString()) }
+
+    fun clearChatHistory(userId: Long) = chatMessageRepository.deleteAllByUserId(userId)
 
     // ── Training plan ─────────────────────────────────────────
 
@@ -360,7 +385,8 @@ class AIService(
         val ctlEstimate = activities.take(42).sumOf { it.tss ?: 0 } / 42.0
 
         return """
-            Eres un entrenador deportivo de élite personalizado. Conoces los datos reales del atleta.
+            Eres un entrenador deportivo personal de élite. Recuerdas todas las conversaciones
+            anteriores con este atleta y mantienes continuidad en el hilo de la conversación.
 
             DATOS DEL ATLETA:
             - CTL estimado: ${ctlEstimate.toInt()} pts

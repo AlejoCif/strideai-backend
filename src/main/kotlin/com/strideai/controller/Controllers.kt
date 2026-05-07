@@ -131,7 +131,17 @@ class AIController(
                 )
             )
         }
-        return ResponseEntity.ok(aiService.chat(request))
+        return ResponseEntity.ok(aiService.chat(request, userId))
+    }
+
+    @GetMapping("/chat/history")
+    fun getChatHistory(): ResponseEntity<List<Map<String, String>>> =
+        ResponseEntity.ok(aiService.getChatHistory(currentUserId()))
+
+    @DeleteMapping("/chat/history")
+    fun clearChatHistory(): ResponseEntity<Map<String, String>> {
+        aiService.clearChatHistory(currentUserId())
+        return ResponseEntity.ok(mapOf("message" to "Historial eliminado"))
     }
 
     @GetMapping("/usage")
