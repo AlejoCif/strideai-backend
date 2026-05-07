@@ -12,9 +12,13 @@ spring:
       maximum-pool-size: 3
       initialization-fail-timeout: 0
 
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: validate
     show-sql: false
 
 server:
