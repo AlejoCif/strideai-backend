@@ -60,6 +60,7 @@ data class ActivitySummary(
     val avgWatts: Double?,
     val avgCadence: Double? = null,
     val calories: Double? = null,
+    val estimatedZone: String? = null,
     val tss: Int?
 )
 

@@ -188,6 +188,7 @@ class StravaService(
         avgWatts = dto.average_watts,
         avgCadence = dto.average_cadence,
         calories = dto.kilojoules?.let { it * 0.239 } ?: dto.calories,
+        estimatedZone = dto.average_heartrate?.let { estimateZone(it) },
         tss = estimateTss(dto)
     )
 
@@ -231,6 +232,17 @@ class StravaService(
         val h = secs / 3600
         val m = (secs % 3600) / 60
         return if (h > 0) "${h}h ${m}m" else "${m}m"
+    }
+
+    fun estimateZone(avgHr: Double, maxHr: Double = 184.0): String {
+        val pct = avgHr / maxHr * 100
+        return when {
+            pct < 60 -> "Z1 (Recuperación)"
+            pct < 78 -> "Z2 (Aeróbico)"
+            pct < 87 -> "Z3 (Tempo)"
+            pct < 95 -> "Z4 (Umbral)"
+            else     -> "Z5 (VO2max)"
+        }
     }
 
     fun estimateTss(dto: StravaActivityDto): Int {

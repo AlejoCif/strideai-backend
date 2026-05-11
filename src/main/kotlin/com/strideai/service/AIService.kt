@@ -433,6 +433,7 @@ class AIService(
                 if (a.elevationGain > 0) append(" | +${a.elevationGain.toInt()} m")
                 a.avgHeartrate?.let { append(" | FC ${it.toInt()} bpm") }
                 a.avgCadence?.let { append(" | ${it.toInt()} rpm") }
+                a.estimatedZone?.let { append(" | $it") }
                 a.tss?.let { append(" | TSS $it") }
                 a.calories?.let { append(" | ${it.toInt()} kcal") }
             }
