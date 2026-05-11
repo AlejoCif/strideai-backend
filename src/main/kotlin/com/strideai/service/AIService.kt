@@ -35,13 +35,18 @@ class AIService(
 
     fun chat(request: ChatRequest, userId: Long): ChatResponse {
         val recentActivities = try {
-            stravaService.getRecentActivities(perPage = 10)
+            stravaService.getRecentActivities(perPage = 20)
                 .map { stravaService.toActivitySummary(it) }
         } catch (e: Exception) {
             emptyList()
         }
 
-        val systemPrompt = buildCoachSystemPrompt(recentActivities)
+        val athleteGoal = trainingPlanRepository
+            .findByUserIdOrderByCreatedAtDesc(userId)
+            .firstOrNull { !it.goal.isNullOrBlank() }
+            ?.goal
+
+        val systemPrompt = buildCoachSystemPrompt(recentActivities, athleteGoal)
 
         // Load persistent history from DB (up to 50 messages)
         val dbHistory = chatMessageRepository.findTop50ByUserIdOrderByCreatedAtAsc(userId)
@@ -380,28 +385,52 @@ class AIService(
         }
     }
 
-    private fun buildCoachSystemPrompt(activities: List<ActivitySummary>): String {
-        val weekTss = activities.take(7).sumOf { it.tss ?: 0 }
+    private fun buildCoachSystemPrompt(activities: List<ActivitySummary>, goal: String? = null): String {
         val ctlEstimate = activities.take(42).sumOf { it.tss ?: 0 } / 42.0
+        val atlEstimate = activities.take(7).sumOf { it.tss ?: 0 } / 7.0
+        val tsb = ctlEstimate - atlEstimate
+        val weekTss = activities.take(7).sumOf { it.tss ?: 0 }
+        val totalKm = activities.sumOf { it.distanceKm }
+        val totalTss = activities.sumOf { it.tss ?: 0 }
+        val avgCadence = activities.mapNotNull { it.avgCadence }
+            .let { if (it.isEmpty()) null else it.average().roundToInt() }
+        val longestRun = activities.maxByOrNull { it.distanceKm }
+
+        val recentDetail = activities.take(10).joinToString("\n") { a ->
+            buildString {
+                append("  • ${a.date} | ${a.name} (${a.type})")
+                append(" | ${a.distanceKm} km | ${a.movingTimeFormatted}")
+                if (a.elevationGain > 0) append(" | +${a.elevationGain.toInt()} m")
+                a.avgHeartrate?.let { append(" | FC ${it.toInt()} bpm") }
+                a.avgCadence?.let { append(" | ${it.toInt()} rpm") }
+                a.tss?.let { append(" | TSS $it") }
+                a.calories?.let { append(" | ${it.toInt()} kcal") }
+            }
+        }
 
         return """
             Eres un entrenador deportivo personal de élite. Recuerdas todas las conversaciones
             anteriores con este atleta y mantienes continuidad en el hilo de la conversación.
+            ${goal?.let { "\nObjetivo del atleta: $it" } ?: ""}
 
-            DATOS DEL ATLETA:
-            - CTL estimado: ${ctlEstimate.toInt()} pts
+            ÚLTIMAS 10 ACTIVIDADES (datos reales del atleta):
+            $recentDetail
+
+            ESTADÍSTICAS ÚLTIMAS 4 SEMANAS:
+            - Distancia total: ${totalKm.roundToInt()} km | TSS total: $totalTss pts
             - TSS esta semana: $weekTss pts
-            - Últimas actividades:
-            ${activities.take(6).joinToString("\n") {
-            "  • ${it.date} ${it.type}: ${it.distanceKm}km, ${it.movingTimeFormatted}, TSS ${it.tss ?: 0}" +
-                (it.avgCadence?.let { c -> ", cadencia ${c.toInt()} rpm" } ?: "") +
-                (it.calories?.let { k -> ", ${k.toInt()} kcal" } ?: "")
-        }}
+            - CTL: ${ctlEstimate.toInt()} pts | ATL: ${atlEstimate.toInt()} pts | TSB: ${tsb.toInt()} pts
+            ${avgCadence?.let { "- Cadencia promedio: $it rpm" } ?: ""}
+            ${longestRun?.let { "- Actividad más larga: ${it.name} — ${it.distanceKm} km (${it.date})" } ?: ""}
 
-            INSTRUCCIONES:
-            - Responde en español, tono motivador pero directo.
-            - Usa los datos reales para personalizar cada respuesta.
-            - Sé conciso: máximo 3 párrafos.
+            INSTRUCCIONES IMPORTANTES:
+            - Tienes acceso a los datos REALES del atleta listados arriba.
+            - SIEMPRE usa esos datos para responder. NUNCA digas que no tienes acceso a los datos
+              o que necesitas que el usuario los proporcione.
+            - Si el usuario pide sincronizar, explica que los datos se actualizan cuando hace clic
+              en Sincronizar en la app.
+            - Sé específico y directo — usa números reales, no generalidades.
+            - Responde en español, tono motivador pero directo. Máximo 3 párrafos.
             - Si preguntan sobre nutrición, hidratación o lesiones, recomienda consultar un profesional.
         """.trimIndent()
     }
