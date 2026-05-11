@@ -165,7 +165,8 @@ data class TrainingPlanResponse(
 
 data class SyncResponse(
     val synced: Int,
-    val success: Boolean
+    val success: Boolean,
+    val zonesUpdated: Int = 0
 )
 
 data class ErrorResponse(

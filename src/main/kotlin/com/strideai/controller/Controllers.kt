@@ -1,7 +1,9 @@
 package com.strideai.controller
 
 import com.strideai.dto.*
+import com.strideai.model.ActivityZones
 import com.strideai.repository.ActivityRepository
+import com.strideai.repository.ActivityZonesRepository
 import com.strideai.service.AIService
 import com.strideai.service.AiUsageService
 import com.strideai.service.StravaService
@@ -49,7 +51,8 @@ class AthleteController(private val stravaService: StravaService) {
 @RequestMapping("/api/activities")
 class ActivitiesController(
     private val stravaService: StravaService,
-    private val activityRepository: ActivityRepository
+    private val activityRepository: ActivityRepository,
+    private val activityZonesRepository: ActivityZonesRepository
 ) {
 
     @GetMapping
@@ -119,7 +122,7 @@ class ActivitiesController(
 
     @PostMapping("/sync")
     fun syncActivities(): ResponseEntity<SyncResponse> {
-        val userId = 1L
+        val userId = SecurityContextHolder.getContext().authentication.principal as Long
         val latest = activityRepository.findRecentByUserId(userId, 1).firstOrNull()
         val stravaActivities = if (latest != null) {
             stravaService.getActivitiesSince(latest.startDate.epochSecond)
@@ -128,7 +131,27 @@ class ActivitiesController(
         }
         val activities = stravaActivities.map { stravaService.toActivity(it, userId) }
         activityRepository.saveAll(activities)
-        return ResponseEntity.ok(SyncResponse(synced = stravaActivities.size, success = true))
+
+        // Sync heart-rate zones for the 5 most recent activities
+        val zonesUpdated = activityRepository
+            .findRecentByUserId(userId, 5)
+            .count { recent ->
+                val json = stravaService.getActivityZones(recent.stravaId)
+                if (json != null) {
+                    activityZonesRepository.save(
+                        ActivityZones(
+                            stravaActivityId = recent.stravaId,
+                            userId = userId,
+                            zonesJson = json
+                        )
+                    )
+                    true
+                } else false
+            }
+
+        return ResponseEntity.ok(
+            SyncResponse(synced = stravaActivities.size, success = true, zonesUpdated = zonesUpdated)
+        )
     }
 }
 

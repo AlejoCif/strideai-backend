@@ -138,6 +138,23 @@ class StravaService(
         }
     }
 
+    fun getActivityZones(activityId: Long): String? {
+        return try {
+            val token = getValidToken()
+            val raw = webClient.get()
+                .uri("$apiBaseUrl/activities/$activityId/zones")
+                .header("Authorization", "Bearer $token")
+                .retrieve()
+                .bodyToMono(String::class.java)
+                .block()
+            logger.info("Fetched zones for activity $activityId")
+            raw
+        } catch (e: WebClientResponseException) {
+            logger.warn("Could not fetch zones for activity $activityId: ${e.statusCode}")
+            null
+        }
+    }
+
     fun getActivitiesSince(epochSeconds: Long): List<StravaActivityDto> {
         return try {
             webClient.get()

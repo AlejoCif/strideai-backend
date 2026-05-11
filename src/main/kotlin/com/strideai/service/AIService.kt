@@ -7,6 +7,7 @@ import com.strideai.model.AiAnalysis
 import com.strideai.model.ChatMessage as ChatMessageEntity
 import com.strideai.model.TrainingPlan
 import com.strideai.repository.AiAnalysisRepository
+import com.strideai.repository.ActivityZonesRepository
 import com.strideai.repository.ChatMessageRepository
 import com.strideai.repository.TrainingPlanRepository
 import org.slf4j.LoggerFactory
@@ -25,6 +26,7 @@ class AIService(
     private val trainingPlanRepository: TrainingPlanRepository,
     private val aiAnalysisRepository: AiAnalysisRepository,
     private val chatMessageRepository: ChatMessageRepository,
+    private val activityZonesRepository: ActivityZonesRepository,
     private val objectMapper: ObjectMapper
 ) {
     @Value("\${app.ai.provider}") private lateinit var aiProviderName: String
@@ -46,7 +48,7 @@ class AIService(
             .firstOrNull { !it.goal.isNullOrBlank() }
             ?.goal
 
-        val systemPrompt = buildCoachSystemPrompt(recentActivities, athleteGoal)
+        val systemPrompt = buildCoachSystemPrompt(recentActivities, athleteGoal, userId)
 
         // Load persistent history from DB (up to 50 messages)
         val dbHistory = chatMessageRepository.findTop50ByUserIdOrderByCreatedAtAsc(userId)
@@ -385,7 +387,35 @@ class AIService(
         }
     }
 
-    private fun buildCoachSystemPrompt(activities: List<ActivitySummary>, goal: String? = null): String {
+    private fun buildZonesSummary(userId: Long): String {
+        if (userId == 0L) return ""
+        val records = activityZonesRepository.findByUserIdOrderByCreatedAtDesc(userId).take(5)
+        if (records.isEmpty()) return ""
+
+        val lines = records.mapNotNull { record ->
+            try {
+                val root = objectMapper.readTree(record.zonesJson)
+                val hrZone = root.elements().asSequence()
+                    .firstOrNull { it.get("type")?.textValue() == "heartrate" } ?: return@mapNotNull null
+                val buckets = hrZone.get("distribution_buckets") ?: return@mapNotNull null
+                val times = buckets.map { it.get("time")?.longValue() ?: 0L }
+                val total = times.sum().takeIf { it > 0 } ?: return@mapNotNull null
+                val pcts = times.mapIndexed { i, t -> "Z${i + 1}=${(t * 100 / total)}%" }
+                "  • Actividad ${record.stravaActivityId}: ${pcts.joinToString(", ")}"
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+        if (lines.isEmpty()) return ""
+        return "ZONAS DE FC (últimas actividades):\n${lines.joinToString("\n")}"
+    }
+
+    private fun buildCoachSystemPrompt(
+        activities: List<ActivitySummary>,
+        goal: String? = null,
+        userId: Long = 0L
+    ): String {
         val ctlEstimate = activities.take(42).sumOf { it.tss ?: 0 } / 42.0
         val atlEstimate = activities.take(7).sumOf { it.tss ?: 0 } / 7.0
         val tsb = ctlEstimate - atlEstimate
@@ -422,6 +452,8 @@ class AIService(
             - CTL: ${ctlEstimate.toInt()} pts | ATL: ${atlEstimate.toInt()} pts | TSB: ${tsb.toInt()} pts
             ${avgCadence?.let { "- Cadencia promedio: $it rpm" } ?: ""}
             ${longestRun?.let { "- Actividad más larga: ${it.name} — ${it.distanceKm} km (${it.date})" } ?: ""}
+
+            ${buildZonesSummary(userId)}
 
             INSTRUCCIONES IMPORTANTES:
             - Tienes acceso a los datos REALES del atleta listados arriba.
