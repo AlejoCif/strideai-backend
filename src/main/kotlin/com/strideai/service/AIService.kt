@@ -43,16 +43,11 @@ class AIService(
             emptyList()
         }
 
-        val athleteGoal = trainingPlanRepository
-            .findByUserIdOrderByCreatedAtDesc(userId)
-            .firstOrNull { !it.goal.isNullOrBlank() }
-            ?.goal
-
-        val systemPrompt = buildCoachSystemPrompt(recentActivities, athleteGoal, userId)
-
         // Load persistent history from DB (up to 50 messages)
         val dbHistory = chatMessageRepository.findTop50ByUserIdOrderByCreatedAtAsc(userId)
             .map { ChatMessage(role = it.role, content = it.content) }
+
+        val systemPrompt = buildCoachSystemPrompt(recentActivities, dbHistory.takeLast(20))
 
         val messages = dbHistory.toMutableList()
         messages.add(ChatMessage(role = "user", content = request.message))
@@ -413,58 +408,63 @@ class AIService(
 
     private fun buildCoachSystemPrompt(
         activities: List<ActivitySummary>,
-        goal: String? = null,
-        userId: Long = 0L
+        chatHistory: List<ChatMessage>
     ): String {
-        val ctlEstimate = activities.take(42).sumOf { it.tss ?: 0 } / 42.0
-        val atlEstimate = activities.take(7).sumOf { it.tss ?: 0 } / 7.0
-        val tsb = ctlEstimate - atlEstimate
-        val weekTss = activities.take(7).sumOf { it.tss ?: 0 }
-        val totalKm = activities.sumOf { it.distanceKm }
-        val totalTss = activities.sumOf { it.tss ?: 0 }
-        val avgCadence = activities.mapNotNull { it.avgCadence }
-            .let { if (it.isEmpty()) null else it.average().roundToInt() }
-        val longestRun = activities.maxByOrNull { it.distanceKm }
-
-        val recentDetail = activities.take(10).joinToString("\n") { a ->
-            buildString {
-                append("  • ${a.date} | ${a.name} (${a.type})")
-                append(" | ${a.distanceKm} km | ${a.movingTimeFormatted}")
-                if (a.elevationGain > 0) append(" | +${a.elevationGain.toInt()} m")
-                a.avgHeartrate?.let { append(" | FC ${it.toInt()} bpm") }
-                a.avgCadence?.let { append(" | ${it.toInt()} rpm") }
-                a.estimatedZone?.let { append(" | $it") }
-                a.tss?.let { append(" | TSS $it") }
-                a.calories?.let { append(" | ${it.toInt()} kcal") }
-            }
+        val activityLines = activities.take(10).joinToString("\n") { a ->
+            "- ${a.date} | ${a.type} | ${a.name} | ${a.distanceKm}km | " +
+            "${a.movingTimeFormatted} | FC: ${a.avgHeartrate?.toInt() ?: "N/A"} bpm | " +
+            "Cadencia: ${a.avgCadence?.toInt() ?: "N/A"} rpm | TSS: ${a.tss ?: 0} | " +
+            "Desnivel: ${a.elevationGain.toInt()}m"
         }
 
+        val historyContext = chatHistory.takeLast(20)
+            .joinToString("\n") { "${it.role}: ${it.content}" }
+
         return """
-            Eres un entrenador deportivo personal de élite. Recuerdas todas las conversaciones
-            anteriores con este atleta y mantienes continuidad en el hilo de la conversación.
-            ${goal?.let { "\nObjetivo del atleta: $it" } ?: ""}
+            Eres el entrenador personal de este atleta. Lo conoces bien.
 
-            ÚLTIMAS 10 ACTIVIDADES (datos reales del atleta):
-            $recentDetail
+            DATOS DE ACTIVIDADES RECIENTES:
+            $activityLines
 
-            ESTADÍSTICAS ÚLTIMAS 4 SEMANAS:
-            - Distancia total: ${totalKm.roundToInt()} km | TSS total: $totalTss pts
-            - TSS esta semana: $weekTss pts
-            - CTL: ${ctlEstimate.toInt()} pts | ATL: ${atlEstimate.toInt()} pts | TSB: ${tsb.toInt()} pts
-            ${avgCadence?.let { "- Cadencia promedio: $it rpm" } ?: ""}
-            ${longestRun?.let { "- Actividad más larga: ${it.name} — ${it.distanceKm} km (${it.date})" } ?: ""}
+            HISTORIAL RECIENTE DEL CHAT:
+            $historyContext
 
-            ${buildZonesSummary(userId)}
+            REGLAS DE COMPORTAMIENTO — CRÍTICAS:
+            1. SÉ DIRECTO. Responde la pregunta en la primera oración.
+               Mal: "Es importante considerar varios factores..."
+               Bien: "Sí, aplica cera antes de salir."
 
-            INSTRUCCIONES IMPORTANTES:
-            - Tienes acceso a los datos REALES del atleta listados arriba.
-            - SIEMPRE usa esos datos para responder. NUNCA digas que no tienes acceso a los datos
-              o que necesitas que el usuario los proporcione.
-            - Si el usuario pide sincronizar, explica que los datos se actualizan cuando hace clic
-              en Sincronizar en la app.
-            - Sé específico y directo — usa números reales, no generalidades.
-            - Responde en español, tono motivador pero directo. Máximo 3 párrafos.
-            - Si preguntan sobre nutrición, hidratación o lesiones, recomienda consultar un profesional.
+            2. USA EL HISTORIAL. Si el atleta mencionó algo antes
+               (óxido, lesión, bici, objetivo) úsalo en tu respuesta.
+               Nunca ignores contexto previo.
+
+            3. SÉ ESPECÍFICO. Usa sus datos reales:
+               Mal: "Has estado entrenando bien"
+               Bien: "Tu salida del 7 de mayo fue 36.6km con FC 136bpm"
+
+            4. RESPUESTAS CORTAS. Máximo 3 párrafos cortos.
+               Si la pregunta es simple, responde en 2-3 oraciones.
+
+            5. PREGUNTA DE SEGUIMIENTO. Termina con UNA pregunta
+               inteligente y específica cuando sea relevante.
+               Mal: "¿Tienes alguna duda?"
+               Bien: "¿La cadena se ve gris/seca o todavía brillante?"
+
+            6. NUNCA uses frases genéricas como:
+               - "Es fundamental para..."
+               - "Recuerda mantener..."
+               - "¡Sigue así!"
+               - "mantén la motivación"
+               - "garantizar un paseo óptimo"
+
+            7. NUNCA digas que no tienes datos si los tienes arriba.
+
+            8. Si preguntan de mantenimiento, nutrición, lesiones o
+               equipamiento — responde con criterio de entrenador real,
+               usando el contexto del historial si existe.
+
+            Idioma: español. Tono: directo, cercano, como un entrenador
+            de confianza. No como un asistente corporativo.
         """.trimIndent()
     }
 }
