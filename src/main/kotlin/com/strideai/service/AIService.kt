@@ -36,6 +36,7 @@ class AIService(
     // ── Chat ─────────────────────────────────────────────────
 
     fun chat(request: ChatRequest, userId: Long): ChatResponse {
+        logger.info("=== CHAT CALLED for userId: $userId ===")
         val recentActivities = try {
             stravaService.getRecentActivities(perPage = 20)
                 .map { stravaService.toActivitySummary(it) }
@@ -48,6 +49,7 @@ class AIService(
             .map { ChatMessage(role = it.role, content = it.content) }
 
         val systemPrompt = buildCoachSystemPrompt(recentActivities, dbHistory.takeLast(20))
+        logger.info("=== PROMPT BUILT with ${recentActivities.size} activities ===")
 
         val messages = dbHistory.toMutableList()
         messages.add(ChatMessage(role = "user", content = request.message))
