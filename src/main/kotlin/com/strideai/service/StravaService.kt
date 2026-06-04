@@ -192,6 +192,38 @@ class StravaService(
         tss = estimateTss(dto)
     )
 
+    fun toActivitySummary(activity: Activity): ActivitySummary {
+        val tss = run {
+            if (activity.sufferScore != null && activity.sufferScore > 0) return@run activity.sufferScore
+            if (activity.weightedAverageWatts != null && activity.weightedAverageWatts > 0) {
+                val ftp = 250.0
+                val np = activity.weightedAverageWatts.toDouble()
+                val intensityFactor = np / ftp
+                return@run ((activity.movingTimeSecs * np * intensityFactor) / (ftp * 3600) * 100).roundToInt()
+            }
+            if (activity.averageHeartrate != null) {
+                val hrRatio = (activity.averageHeartrate - 60) / (185 - 60)
+                return@run (hrRatio * (activity.movingTimeSecs / 3600.0) * 100).roundToInt()
+            }
+            ((activity.movingTimeSecs / 3600.0) * 50).roundToInt()
+        }
+        return ActivitySummary(
+            stravaId = activity.stravaId,
+            name = activity.name,
+            type = activity.sportType,
+            date = activity.startDateLocal.take(10),
+            distanceKm = (activity.distanceMeters / 1000 * 10).roundToInt() / 10.0,
+            movingTimeFormatted = formatSeconds(activity.movingTimeSecs),
+            elevationGain = activity.totalElevationGain,
+            avgHeartrate = activity.averageHeartrate,
+            avgWatts = activity.averageWatts,
+            avgCadence = activity.averageCadence,
+            calories = activity.calories,
+            estimatedZone = activity.averageHeartrate?.let { estimateZone(it) },
+            tss = tss
+        )
+    }
+
     fun toActivity(dto: StravaActivityDto, userId: Long): Activity {
         logger.info(
             "Activity ${dto.id} (${dto.sport_type}): " +

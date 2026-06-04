@@ -7,6 +7,7 @@ import com.strideai.model.AiAnalysis
 import com.strideai.model.ChatMessage as ChatMessageEntity
 import com.strideai.model.TrainingPlan
 import com.strideai.repository.AiAnalysisRepository
+import com.strideai.repository.ActivityRepository
 import com.strideai.repository.ActivityZonesRepository
 import com.strideai.repository.ChatMessageRepository
 import com.strideai.repository.TrainingPlanRepository
@@ -26,6 +27,7 @@ class AIService(
     private val trainingPlanRepository: TrainingPlanRepository,
     private val aiAnalysisRepository: AiAnalysisRepository,
     private val chatMessageRepository: ChatMessageRepository,
+    private val activityRepository: ActivityRepository,
     private val activityZonesRepository: ActivityZonesRepository,
     private val objectMapper: ObjectMapper
 ) {
@@ -37,19 +39,27 @@ class AIService(
 
     fun chat(request: ChatRequest, userId: Long): ChatResponse {
         logger.info("=== CHAT CALLED for userId: $userId ===")
-        val recentActivities = try {
-            stravaService.getRecentActivities(perPage = 20)
-                .map { stravaService.toActivitySummary(it) }
+
+        // Silent sync: upsert latest 10 activities from Strava, then use them directly
+        val activities: List<ActivitySummary> = try {
+            val recentFromStrava = stravaService.getRecentActivities(perPage = 10, page = 1)
+            recentFromStrava.forEach { dto ->
+                activityRepository.save(stravaService.toActivity(dto, userId))
+            }
+            logger.info("Auto-sync: updated ${recentFromStrava.size} activities for userId: $userId")
+            recentFromStrava.map { stravaService.toActivitySummary(it) }
         } catch (e: Exception) {
-            emptyList()
+            logger.warn("Auto-sync failed, using cached data: ${e.message}")
+            activityRepository.findRecentByUserId(userId, 10)
+                .map { stravaService.toActivitySummary(it) }
         }
 
         // Load persistent history from DB (up to 50 messages)
         val dbHistory = chatMessageRepository.findTop50ByUserIdOrderByCreatedAtAsc(userId)
             .map { ChatMessage(role = it.role, content = it.content) }
 
-        val systemPrompt = buildCoachSystemPrompt(recentActivities, dbHistory.takeLast(20))
-        logger.info("=== PROMPT BUILT with ${recentActivities.size} activities ===")
+        val systemPrompt = buildCoachSystemPrompt(activities, dbHistory.takeLast(20))
+        logger.info("=== PROMPT BUILT with ${activities.size} activities ===")
 
         val messages = dbHistory.toMutableList()
         messages.add(ChatMessage(role = "user", content = request.message))
