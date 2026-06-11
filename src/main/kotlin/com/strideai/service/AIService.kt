@@ -54,6 +54,15 @@ class AIService(
                 .map { stravaService.toActivitySummary(it) }
         }
 
+        // On-demand search: if the user asks about a past activity by name or month
+        val searchedActivities = if (detectActivitySearch(request.message)) {
+            val found = searchRelevantActivities(request.message, userId)
+            logger.info("Activity search triggered: ${found.size} activities found for query: ${request.message}")
+            found
+        } else {
+            emptyList()
+        }
+
         logger.info("=== ACTIVIDADES PASADAS AL LLM ===")
         logger.info("Total actividades: ${activities.size}")
         activities.forEachIndexed { i, a ->
@@ -73,7 +82,7 @@ class AIService(
         }
         logger.info("=== FIN HISTORIAL ===")
 
-        val systemPrompt = buildCoachSystemPrompt(activities, chatHistory)
+        val systemPrompt = buildCoachSystemPrompt(activities, chatHistory, searchedActivities)
         logger.info("=== PROMPT BUILT with ${activities.size} activities ===")
 
         val messages = dbHistory.toMutableList()
@@ -287,11 +296,33 @@ class AIService(
         messages: List<ChatMessage>,
         maxTokens: Int = 1500
     ): String {
-        val provider: AIProvider = when (aiProviderName.lowercase().trim()) {
-            "openai" -> openAIProvider
-            else -> anthropicProvider
+        val primary = aiProviderName.lowercase().trim()
+
+        try {
+            return when (primary) {
+                "openai" -> openAIProvider.generate(systemPrompt, messages, maxTokens)
+                else     -> anthropicProvider.generate(systemPrompt, messages, maxTokens)
+            }
+        } catch (e: Exception) {
+            val isAvailability = e.message?.contains("overloaded",   ignoreCase = true) == true
+                || e.message?.contains("529")                                            == true
+                || e.message?.contains("AI_UNAVAILABLE")                                == true
+                || e.message?.contains("rate_limit",    ignoreCase = true)               == true
+
+            if (!isAvailability) throw e
+
+            logger.warn("Proveedor principal '$primary' falló (${e.message}), intentando fallback...")
+
+            try {
+                return when (primary) {
+                    "openai" -> anthropicProvider.generate(systemPrompt, messages, maxTokens)
+                    else     -> openAIProvider.generate(systemPrompt, messages, maxTokens)
+                }
+            } catch (fe: Exception) {
+                logger.error("Fallback también falló: ${fe.message}")
+                throw RuntimeException("AI_UNAVAILABLE")
+            }
         }
-        return provider.generate(systemPrompt, messages, maxTokens)
     }
 
     // ── Local fallbacks ───────────────────────────────────────
@@ -374,6 +405,53 @@ class AIService(
         )
     )
 
+    // ── Activity search ───────────────────────────────────────
+
+    private fun detectActivitySearch(userMessage: String): Boolean {
+        val keywords = listOf(
+            "año pasado", "el año anterior", "semana pasada",
+            "el mes pasado", "aquella salida", "aquella actividad",
+            "enero", "febrero", "marzo", "abril", "mayo", "junio",
+            "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+            "alto de letras", "bogotá", "villavicencio", "la vega",
+            "hace", "busca", "encuentra", "revisa esa", "esa actividad",
+            "esa salida", "la del", "la de"
+        )
+        return keywords.any { userMessage.lowercase().contains(it) }
+    }
+
+    private fun searchRelevantActivities(userMessage: String, userId: Long): List<ActivitySummary> {
+        val message = userMessage.lowercase()
+
+        val nameKeywords = listOf(
+            "alto de letras", "bogotá", "villavicencio", "la vega",
+            "patios", "teusaca", "sisga", "calera", "melgar", "espinal"
+        )
+
+        val matchedKeyword = nameKeywords.firstOrNull { message.contains(it) }
+        if (matchedKeyword != null) {
+            return activityRepository
+                .findByUserIdAndNameContainingIgnoreCase(userId, matchedKeyword)
+                .take(5)
+                .map { stravaService.toActivitySummary(it) }
+        }
+
+        val monthMap = mapOf(
+            "enero" to 1, "febrero" to 2, "marzo" to 3, "abril" to 4,
+            "mayo" to 5, "junio" to 6, "julio" to 7, "agosto" to 8,
+            "septiembre" to 9, "octubre" to 10, "noviembre" to 11, "diciembre" to 12
+        )
+        val mentionedMonth = monthMap.entries.firstOrNull { message.contains(it.key) }
+        if (mentionedMonth != null) {
+            return activityRepository
+                .findByUserIdAndMonth(userId, mentionedMonth.value)
+                .take(5)
+                .map { stravaService.toActivitySummary(it) }
+        }
+
+        return emptyList()
+    }
+
     // ── Helpers ───────────────────────────────────────────────
 
     private fun buildActivitiesHash(activities: List<ActivitySummary>): String {
@@ -435,7 +513,8 @@ class AIService(
 
     private fun buildCoachSystemPrompt(
         activities: List<ActivitySummary>,
-        chatHistory: List<ChatMessage>
+        chatHistory: List<ChatMessage>,
+        searchedActivities: List<ActivitySummary> = emptyList()
     ): String {
         val activityLines = activities.take(10).joinToString("\n") { a ->
             "- ${a.date} | ${a.type} | ${a.name} | ${a.distanceKm}km | " +
@@ -444,6 +523,17 @@ class AIService(
             "Desnivel: ${a.elevationGain.toInt()}m"
         }
 
+        val searchSection = if (searchedActivities.isNotEmpty()) {
+            val lines = searchedActivities.joinToString("\n") { a ->
+                "- ${a.date} | ${a.type} | ${a.name} | ${a.distanceKm}km | " +
+                "${a.movingTimeFormatted} | FC: ${a.avgHeartrate?.toInt() ?: "N/A"} bpm | " +
+                "TSS: ${a.tss ?: 0} | Desnivel: ${a.elevationGain.toInt()}m"
+            }
+            "\n\n            ACTIVIDADES ENCONTRADAS POR BÚSQUEDA:\n" +
+            "            (Estas actividades se encontraron porque el usuario preguntó por ellas específicamente)\n" +
+            lines
+        } else ""
+
         val historyContext = chatHistory.takeLast(20)
             .joinToString("\n") { "${it.role}: ${it.content}" }
 
@@ -451,7 +541,7 @@ class AIService(
             Eres el entrenador personal de este atleta. Lo conoces bien.
 
             DATOS DE ACTIVIDADES RECIENTES:
-            $activityLines
+            $activityLines$searchSection
 
             HISTORIAL RECIENTE DEL CHAT:
             $historyContext

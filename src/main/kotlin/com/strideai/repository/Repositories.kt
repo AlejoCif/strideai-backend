@@ -6,6 +6,7 @@ import com.strideai.model.TrainingPlan
 import com.strideai.model.User
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Query
+import org.springframework.data.repository.query.Param
 import org.springframework.stereotype.Repository
 import java.time.Instant
 
@@ -23,6 +24,14 @@ interface ActivityRepository : JpaRepository<Activity, Long> {
     fun findRecentByUserId(userId: Long, limit: Int): List<Activity>
 
     fun findByStravaId(stravaId: Long): Activity?
+
+    fun findByUserIdAndNameContainingIgnoreCase(userId: Long, name: String): List<Activity>
+
+    @Query(
+        value = "SELECT * FROM activities WHERE user_id = :userId AND EXTRACT(MONTH FROM start_date) = :month ORDER BY start_date DESC",
+        nativeQuery = true
+    )
+    fun findByUserIdAndMonth(@Param("userId") userId: Long, @Param("month") month: Int): List<Activity>
 }
 
 @Repository
