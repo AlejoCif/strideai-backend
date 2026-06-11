@@ -54,11 +54,26 @@ class AIService(
                 .map { stravaService.toActivitySummary(it) }
         }
 
+        logger.info("=== ACTIVIDADES PASADAS AL LLM ===")
+        logger.info("Total actividades: ${activities.size}")
+        activities.forEachIndexed { i, a ->
+            logger.info("[$i] ${a.date} | ${a.name} | ${a.distanceKm}km | FC: ${a.avgHeartrate}")
+        }
+        logger.info("=== FIN ACTIVIDADES ===")
+
         // Load persistent history from DB (up to 50 messages)
         val dbHistory = chatMessageRepository.findTop50ByUserIdOrderByCreatedAtAsc(userId)
             .map { ChatMessage(role = it.role, content = it.content) }
 
-        val systemPrompt = buildCoachSystemPrompt(activities, dbHistory.takeLast(20))
+        val chatHistory = dbHistory.takeLast(20)
+        logger.info("=== HISTORIAL PASADO AL LLM ===")
+        logger.info("Total mensajes en historial: ${chatHistory.size}")
+        chatHistory.forEach { msg ->
+            logger.info("${msg.role}: ${msg.content.take(150)}")
+        }
+        logger.info("=== FIN HISTORIAL ===")
+
+        val systemPrompt = buildCoachSystemPrompt(activities, chatHistory)
         logger.info("=== PROMPT BUILT with ${activities.size} activities ===")
 
         val messages = dbHistory.toMutableList()
