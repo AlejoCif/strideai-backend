@@ -9,7 +9,7 @@ app:
   anthropic:
     api-key: test-api-key
     api-url: https://api.anthropic.com/v1/messages
-    model: claude-sonnet-4-20250514
+    model: claude-sonnet-4-6
 
 spring:
   security:
