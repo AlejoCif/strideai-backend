@@ -72,6 +72,15 @@ data class AthleteProfile(
     val country: String?
 )
 
+data class AthleteProfileDto(
+    val weightKg: Double? = null,
+    val mainSport: String? = null,
+    val goalEvent: String? = null,
+    val goalDate: String? = null,
+    val equipment: String? = null,
+    val notes: String? = null
+)
+
 data class WeeklyStats(
     val weekLabel: String,
     val totalDistanceKm: Double,

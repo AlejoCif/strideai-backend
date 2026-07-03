@@ -2,8 +2,10 @@ package com.strideai.controller
 
 import com.strideai.dto.*
 import com.strideai.model.ActivityZones
+import com.strideai.model.AthleteProfile as AthleteProfileEntity
 import com.strideai.repository.ActivityRepository
 import com.strideai.repository.ActivityZonesRepository
+import com.strideai.repository.AthleteProfileRepository
 import com.strideai.service.AIService
 import com.strideai.service.AiUsageService
 import com.strideai.service.StravaService
@@ -32,7 +34,10 @@ class HealthController {
 
 @RestController
 @RequestMapping("/api/athlete")
-class AthleteController(private val stravaService: StravaService) {
+class AthleteController(
+    private val stravaService: StravaService,
+    private val athleteProfileRepository: AthleteProfileRepository
+) {
 
     @GetMapping
     fun getAthlete(): ResponseEntity<AthleteProfile> {
@@ -44,6 +49,58 @@ class AthleteController(private val stravaService: StravaService) {
                 profileImageUrl = athlete.profile,
                 city = athlete.city,
                 country = athlete.country
+            )
+        )
+    }
+
+    @GetMapping("/profile")
+    fun getProfile(): ResponseEntity<AthleteProfileDto> {
+        val userId = SecurityContextHolder.getContext().authentication.principal as Long
+        val profile = athleteProfileRepository.findByUserId(userId)
+            ?: return ResponseEntity.ok(AthleteProfileDto())
+        return ResponseEntity.ok(
+            AthleteProfileDto(
+                weightKg = profile.weightKg?.toDouble(),
+                mainSport = profile.mainSport,
+                goalEvent = profile.goalEvent,
+                goalDate = profile.goalDate?.toString(),
+                equipment = profile.equipment,
+                notes = profile.notes
+            )
+        )
+    }
+
+    @PutMapping("/profile")
+    fun updateProfile(@RequestBody dto: AthleteProfileDto): ResponseEntity<AthleteProfileDto> {
+        val userId = SecurityContextHolder.getContext().authentication.principal as Long
+        val existing = athleteProfileRepository.findByUserId(userId)
+        val goalDate = dto.goalDate?.let { java.time.LocalDate.parse(it) }
+        val entity = existing?.copy(
+            weightKg = dto.weightKg?.let { java.math.BigDecimal.valueOf(it) } ?: existing.weightKg,
+            mainSport = dto.mainSport ?: existing.mainSport,
+            goalEvent = dto.goalEvent ?: existing.goalEvent,
+            goalDate = goalDate ?: existing.goalDate,
+            equipment = dto.equipment ?: existing.equipment,
+            notes = dto.notes ?: existing.notes,
+            updatedAt = java.time.Instant.now()
+        ) ?: AthleteProfileEntity(
+            userId = userId,
+            weightKg = dto.weightKg?.let { java.math.BigDecimal.valueOf(it) },
+            mainSport = dto.mainSport,
+            goalEvent = dto.goalEvent,
+            goalDate = goalDate,
+            equipment = dto.equipment,
+            notes = dto.notes
+        )
+        val saved = athleteProfileRepository.save(entity)
+        return ResponseEntity.ok(
+            AthleteProfileDto(
+                weightKg = saved.weightKg?.toDouble(),
+                mainSport = saved.mainSport,
+                goalEvent = saved.goalEvent,
+                goalDate = saved.goalDate?.toString(),
+                equipment = saved.equipment,
+                notes = saved.notes
             )
         )
     }

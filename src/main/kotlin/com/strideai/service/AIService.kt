@@ -9,6 +9,7 @@ import com.strideai.model.TrainingPlan
 import com.strideai.repository.AiAnalysisRepository
 import com.strideai.repository.ActivityRepository
 import com.strideai.repository.ActivityZonesRepository
+import com.strideai.repository.AthleteProfileRepository
 import com.strideai.repository.ChatMessageRepository
 import com.strideai.repository.TrainingPlanRepository
 import com.strideai.repository.UserRepository
@@ -35,6 +36,7 @@ class AIService(
     private val activityRepository: ActivityRepository,
     private val activityZonesRepository: ActivityZonesRepository,
     private val userRepository: UserRepository,
+    private val athleteProfileRepository: AthleteProfileRepository,
     private val objectMapper: ObjectMapper
 ) {
     @Value("\${app.ai.provider}") private lateinit var aiProviderName: String
@@ -86,7 +88,8 @@ class AIService(
         logger.info("=== FIN HISTORIAL ===")
 
         val firstName = userRepository.findById(userId).map { it.firstName }.orElse("atleta")
-        val systemPrompt = buildCoachSystemPrompt(activities, chatHistory, searchedActivities, firstName)
+        val athleteProfile = athleteProfileRepository.findByUserId(userId)
+        val systemPrompt = buildCoachSystemPrompt(activities, chatHistory, searchedActivities, firstName, athleteProfile)
         logger.info("=== PROMPT BUILT with ${activities.size} activities ===")
 
         val messages = dbHistory.toMutableList()
@@ -495,7 +498,8 @@ class AIService(
         activities: List<ActivitySummary>,
         chatHistory: List<ChatMessage>,
         searchedActivities: List<ActivitySummary> = emptyList(),
-        firstName: String = "atleta"
+        firstName: String = "atleta",
+        profile: com.strideai.model.AthleteProfile? = null
     ): String {
         val activityLines = activities.take(10).joinToString("\n") { a ->
             "- ${a.date} | ${a.type} | ${a.name} | ${a.distanceKm}km | " +
@@ -524,6 +528,15 @@ class AIService(
         val fechaActual = now.format(DateTimeFormatter.ofPattern(
             "EEEE d 'de' MMMM 'de' yyyy, HH:mm", Locale("es", "CO")))
 
+        val profileContext = if (profile != null) """
+            PERFIL DEL ATLETA:
+            Peso: ${profile.weightKg?.let { "${it}kg" } ?: "no registrado"}
+            Deporte principal: ${profile.mainSport ?: "no registrado"}
+            Objetivo: ${profile.goalEvent ?: "no registrado"}${profile.goalDate?.let { " el $it" } ?: ""}
+            Equipamiento: ${profile.equipment ?: "no registrado"}
+            Notas: ${profile.notes ?: "ninguna"}
+        """.trimIndent() else ""
+
         val historyContext = chatHistory.takeLast(20)
             .joinToString("\n") { "${it.role}: ${it.content}" }
 
@@ -533,6 +546,8 @@ class AIService(
             CONTEXTO DEL ATLETA (extraído de sus datos reales):
             Nombre: $firstName
             Fecha actual: $fechaActual (hora Colombia)
+
+            $profileContext
 
             ACTIVIDADES RECIENTES:
             $activityContext

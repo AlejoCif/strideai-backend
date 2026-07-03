@@ -2,6 +2,7 @@ package com.strideai.repository
 
 import com.strideai.model.Activity
 import com.strideai.model.AiAnalysis
+import com.strideai.model.AthleteProfile
 import com.strideai.model.TrainingPlan
 import com.strideai.model.User
 import org.springframework.data.jpa.repository.JpaRepository
@@ -43,4 +44,9 @@ interface TrainingPlanRepository : JpaRepository<TrainingPlan, Long> {
 @Repository
 interface AiAnalysisRepository : JpaRepository<AiAnalysis, Long> {
     fun findFirstByUserIdOrderByCreatedAtDesc(userId: Long): AiAnalysis?
+}
+
+@Repository
+interface AthleteProfileRepository : JpaRepository<AthleteProfile, Long> {
+    fun findByUserId(userId: Long): AthleteProfile?
 }
