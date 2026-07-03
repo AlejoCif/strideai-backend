@@ -77,23 +77,22 @@ class ActivitiesController(
         val weekStart = bogotaToday.with(DayOfWeek.MONDAY)
         val labelFormatter = DateTimeFormatter.ofPattern("dd/MM")
 
-        val grouped = activities
-            .groupBy { act ->
-                LocalDate.parse(act.start_date_local.take(10)).with(DayOfWeek.MONDAY)
-            }
-            .entries
-            .sortedByDescending { it.key }
-            .take(8)
-            .map { (monday, acts) ->
-                WeeklyStats(
-                    weekLabel = "Sem ${monday.format(labelFormatter)}",
-                    totalDistanceKm = acts.sumOf { it.distance } / 1000,
-                    totalTimeHours = acts.sumOf { it.moving_time } / 3600.0,
-                    totalElevation = acts.sumOf { it.total_elevation_gain },
-                    activityCount = acts.size,
-                    estimatedTss = acts.sumOf { stravaService.estimateTss(it) }
-                )
-            }
+        val actsByMonday = activities.groupBy { act ->
+            LocalDate.parse(act.start_date_local.take(10)).with(DayOfWeek.MONDAY)
+        }
+
+        val grouped = (0..11).map { i ->
+            val monday = weekStart.minusWeeks(i.toLong())
+            val acts = actsByMonday[monday] ?: emptyList()
+            WeeklyStats(
+                weekLabel = "Sem ${monday.format(labelFormatter)}",
+                totalDistanceKm = acts.sumOf { it.distance } / 1000,
+                totalTimeHours = acts.sumOf { it.moving_time } / 3600.0,
+                totalElevation = acts.sumOf { it.total_elevation_gain },
+                activityCount = acts.size,
+                estimatedTss = acts.sumOf { stravaService.estimateTss(it) }
+            )
+        }.reversed()
 
         val currentWeekActs = activities.filter { act ->
             LocalDate.parse(act.start_date_local.take(10)) >= weekStart
