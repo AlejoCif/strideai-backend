@@ -11,6 +11,10 @@ import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.web.bind.annotation.*
+import java.time.DayOfWeek
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 // ── Health ────────────────────────────────────────────────
 
@@ -69,12 +73,20 @@ class ActivitiesController(
     fun getWeeklyStats(): ResponseEntity<Map<String, Any>> {
         val activities = stravaService.getRecentActivities(perPage = 100)
 
-        val grouped = activities.groupBy { it.start_date_local.take(7) }
+        val bogotaToday = LocalDate.now(ZoneId.of("America/Bogota"))
+        val weekStart = bogotaToday.with(DayOfWeek.MONDAY)
+        val labelFormatter = DateTimeFormatter.ofPattern("dd/MM")
+
+        val grouped = activities
+            .groupBy { act ->
+                LocalDate.parse(act.start_date_local.take(10)).with(DayOfWeek.MONDAY)
+            }
             .entries
+            .sortedByDescending { it.key }
             .take(8)
-            .map { (week, acts) ->
+            .map { (monday, acts) ->
                 WeeklyStats(
-                    weekLabel = week,
+                    weekLabel = "Sem ${monday.format(labelFormatter)}",
                     totalDistanceKm = acts.sumOf { it.distance } / 1000,
                     totalTimeHours = acts.sumOf { it.moving_time } / 3600.0,
                     totalElevation = acts.sumOf { it.total_elevation_gain },
@@ -83,9 +95,13 @@ class ActivitiesController(
                 )
             }
 
+        val currentWeekActs = activities.filter { act ->
+            LocalDate.parse(act.start_date_local.take(10)) >= weekStart
+        }
+
         val recentActs = activities.take(42)
         val ctl = recentActs.sumOf { stravaService.estimateTss(it) } / 42.0
-        val atl = activities.take(7).sumOf { stravaService.estimateTss(it) } / 7.0
+        val atl = recentActs.take(7).sumOf { stravaService.estimateTss(it) } / 7.0
 
         return ResponseEntity.ok(mapOf(
             "weekly" to grouped,
@@ -93,7 +109,7 @@ class ActivitiesController(
                 ctl = Math.round(ctl * 10) / 10.0,
                 atl = Math.round(atl * 10) / 10.0,
                 tsb = Math.round((ctl - atl) * 10) / 10.0,
-                weeklyTss = activities.take(7).sumOf { stravaService.estimateTss(it) }
+                weeklyTss = currentWeekActs.sumOf { stravaService.estimateTss(it) }
             )
         ))
     }
