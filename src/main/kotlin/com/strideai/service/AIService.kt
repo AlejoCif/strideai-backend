@@ -17,6 +17,10 @@ import org.springframework.stereotype.Service
 import java.security.MessageDigest
 import java.time.DayOfWeek
 import java.time.LocalDate
+import java.time.ZoneId
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import kotlin.math.roundToInt
 
 @Service
@@ -507,10 +511,22 @@ class AIService(
             lines
         } else ""
 
+        val colombiaZone = ZoneId.of("America/Bogota")
+        val now = ZonedDateTime.now(colombiaZone)
+        val fechaActual = now.format(DateTimeFormatter.ofPattern(
+            "EEEE d 'de' MMMM 'de' yyyy, HH:mm", Locale("es", "CO")))
+
         val historyContext = chatHistory.takeLast(20)
             .joinToString("\n") { "${it.role}: ${it.content}" }
 
         return """
+            Fecha y hora actual: $fechaActual (hora Colombia)
+
+            Usa esto para:
+            - Saber cuándo fue la última actividad vs hoy
+            - Entender si el usuario va a salir hoy, mañana o lleva días sin entrenar
+            - Calcular días desde último encerado, cambio de llantas, etc.
+
             Eres el entrenador personal de este atleta. Lo conoces bien.
 
             DATOS DE ACTIVIDADES RECIENTES:
