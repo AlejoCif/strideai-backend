@@ -54,13 +54,10 @@ class AIService(
                 .map { stravaService.toActivitySummary(it) }
         }
 
-        // On-demand search: if the user asks about a past activity by name or month
-        val searchedActivities = if (detectActivitySearch(request.message)) {
-            val found = searchRelevantActivities(request.message, userId)
-            logger.info("Activity search triggered: ${found.size} activities found for query: ${request.message}")
-            found
-        } else {
-            emptyList()
+        // Dynamic search: always search DB using words > 4 chars from user message
+        val searchedActivities = searchRelevantActivities(request.message, userId)
+        if (searchedActivities.isNotEmpty()) {
+            logger.info("Found ${searchedActivities.size} activities matching: ${request.message}")
         }
 
         logger.info("=== ACTIVIDADES PASADAS AL LLM ===")
@@ -407,49 +404,25 @@ class AIService(
 
     // ── Activity search ───────────────────────────────────────
 
-    private fun detectActivitySearch(userMessage: String): Boolean {
-        val keywords = listOf(
-            "año pasado", "el año anterior", "semana pasada",
-            "el mes pasado", "aquella salida", "aquella actividad",
-            "enero", "febrero", "marzo", "abril", "mayo", "junio",
-            "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
-            "alto de letras", "bogotá", "villavicencio", "la vega",
-            "hace", "busca", "encuentra", "revisa esa", "esa actividad",
-            "esa salida", "la del", "la de"
-        )
-        return keywords.any { userMessage.lowercase().contains(it) }
-    }
-
     private fun searchRelevantActivities(userMessage: String, userId: Long): List<ActivitySummary> {
-        val message = userMessage.lowercase()
+        val words = userMessage.lowercase()
+            .split(" ", ",", ".", "?", "!")
+            .filter { it.length > 4 }
+            .distinct()
+            .take(5)
 
-        val nameKeywords = listOf(
-            "alto de letras", "bogotá", "villavicencio", "la vega",
-            "patios", "teusaca", "sisga", "calera", "melgar", "espinal"
-        )
+        if (words.isEmpty()) return emptyList()
 
-        val matchedKeyword = nameKeywords.firstOrNull { message.contains(it) }
-        if (matchedKeyword != null) {
-            return activityRepository
-                .findByUserIdAndNameContainingIgnoreCase(userId, matchedKeyword)
-                .take(5)
-                .map { stravaService.toActivitySummary(it) }
+        val results = mutableListOf<com.strideai.model.Activity>()
+        words.forEach { word ->
+            results.addAll(activityRepository.findByUserIdAndNameContainingIgnoreCase(userId, word))
         }
 
-        val monthMap = mapOf(
-            "enero" to 1, "febrero" to 2, "marzo" to 3, "abril" to 4,
-            "mayo" to 5, "junio" to 6, "julio" to 7, "agosto" to 8,
-            "septiembre" to 9, "octubre" to 10, "noviembre" to 11, "diciembre" to 12
-        )
-        val mentionedMonth = monthMap.entries.firstOrNull { message.contains(it.key) }
-        if (mentionedMonth != null) {
-            return activityRepository
-                .findByUserIdAndMonth(userId, mentionedMonth.value)
-                .take(5)
-                .map { stravaService.toActivitySummary(it) }
-        }
-
-        return emptyList()
+        return results
+            .distinctBy { it.stravaId }
+            .sortedByDescending { it.startDateLocal }
+            .take(5)
+            .map { stravaService.toActivitySummary(it) }
     }
 
     // ── Helpers ───────────────────────────────────────────────
