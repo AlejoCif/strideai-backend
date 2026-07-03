@@ -189,7 +189,8 @@ class StravaService(
         avgCadence = dto.average_cadence,
         calories = dto.kilojoules?.let { it * 0.239 } ?: dto.calories,
         estimatedZone = dto.average_heartrate?.let { estimateZone(it) },
-        tss = estimateTss(dto)
+        tss = estimateTss(dto),
+        summaryPolyline = dto.map?.summary_polyline
     )
 
     fun toActivitySummary(activity: Activity): ActivitySummary {
@@ -220,7 +221,8 @@ class StravaService(
             avgCadence = activity.averageCadence,
             calories = activity.calories,
             estimatedZone = activity.averageHeartrate?.let { estimateZone(it) },
-            tss = tss
+            tss = tss,
+            summaryPolyline = activity.summaryPolyline
         )
     }
 
@@ -254,7 +256,8 @@ class StravaService(
         kudosCount = dto.kudos_count,
         achievementCount = dto.achievement_count,
         prCount = dto.pr_count,
-        sufferScore = dto.suffer_score
+        sufferScore = dto.suffer_score,
+        summaryPolyline = dto.map?.summary_polyline
         )
     }
 

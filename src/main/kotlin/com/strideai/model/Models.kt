@@ -64,6 +64,9 @@ data class Activity(
 
     val sufferScore: Int? = null,
 
+    @Column(columnDefinition = "TEXT")
+    val summaryPolyline: String? = null,
+
     val createdAt: Instant = Instant.now()
 )
 

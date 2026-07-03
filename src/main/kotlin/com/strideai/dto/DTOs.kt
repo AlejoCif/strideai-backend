@@ -18,6 +18,10 @@ data class StravaAthleteDto(
     val country: String?
 )
 
+data class StravaMapDto(
+    val summary_polyline: String? = null
+)
+
 data class StravaActivityDto(
     val id: Long,
     val name: String,
@@ -43,7 +47,8 @@ data class StravaActivityDto(
     val kudos_count: Int,
     val achievement_count: Int,
     val pr_count: Int,
-    val suffer_score: Int?
+    val suffer_score: Int?,
+    val map: StravaMapDto? = null
 )
 
 // ── App API responses ─────────────────────────────────────
@@ -61,7 +66,8 @@ data class ActivitySummary(
     val avgCadence: Double? = null,
     val calories: Double? = null,
     val estimatedZone: String? = null,
-    val tss: Int?
+    val tss: Int?,
+    val summaryPolyline: String? = null
 )
 
 data class AthleteProfile(
