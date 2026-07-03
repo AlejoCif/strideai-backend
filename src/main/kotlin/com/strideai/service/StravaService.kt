@@ -232,6 +232,7 @@ class StravaService(
             "kilojoules=${dto.kilojoules}, calories=${dto.calories}, " +
             "cadence=${dto.average_cadence}, watts=${dto.average_watts}"
         )
+        logger.info("Activity ${dto.id}: map=${dto.map}, polyline=${dto.map?.summary_polyline?.take(20)}")
         return Activity(
         stravaId = dto.id,
         userId = userId,
