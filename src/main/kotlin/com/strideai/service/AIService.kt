@@ -76,7 +76,7 @@ class AIService(
         logger.info("=== FIN ACTIVIDADES ===")
 
         // Load persistent history from DB (up to 50 messages)
-        val dbHistory = chatMessageRepository.findTop50ByUserIdOrderByCreatedAtAsc(userId)
+        val dbHistory = chatMessageRepository.findTop100ByUserIdOrderByCreatedAtAsc(userId)
             .map { ChatMessage(role = it.role, content = it.content) }
 
         val chatHistory = dbHistory.takeLast(20)
@@ -118,7 +118,7 @@ class AIService(
     }
 
     fun getChatHistory(userId: Long): List<Map<String, String>> =
-        chatMessageRepository.findTop50ByUserIdOrderByCreatedAtAsc(userId)
+        chatMessageRepository.findTop100ByUserIdOrderByCreatedAtAsc(userId)
             .map { mapOf("role" to it.role, "content" to it.content, "createdAt" to it.createdAt.toString()) }
 
     fun clearChatHistory(userId: Long) = chatMessageRepository.deleteAllByUserId(userId)

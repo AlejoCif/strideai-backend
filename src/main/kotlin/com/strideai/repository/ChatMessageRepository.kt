@@ -9,7 +9,7 @@ import org.springframework.transaction.annotation.Transactional
 
 @Repository
 interface ChatMessageRepository : JpaRepository<ChatMessage, Long> {
-    fun findTop50ByUserIdOrderByCreatedAtAsc(userId: Long): List<ChatMessage>
+    fun findTop100ByUserIdOrderByCreatedAtAsc(userId: Long): List<ChatMessage>
     fun countByUserId(userId: Long): Long
 
     @Modifying
