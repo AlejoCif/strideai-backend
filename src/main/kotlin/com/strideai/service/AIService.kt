@@ -11,6 +11,7 @@ import com.strideai.repository.ActivityRepository
 import com.strideai.repository.ActivityZonesRepository
 import com.strideai.repository.ChatMessageRepository
 import com.strideai.repository.TrainingPlanRepository
+import com.strideai.repository.UserRepository
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
@@ -33,6 +34,7 @@ class AIService(
     private val chatMessageRepository: ChatMessageRepository,
     private val activityRepository: ActivityRepository,
     private val activityZonesRepository: ActivityZonesRepository,
+    private val userRepository: UserRepository,
     private val objectMapper: ObjectMapper
 ) {
     @Value("\${app.ai.provider}") private lateinit var aiProviderName: String
@@ -83,7 +85,8 @@ class AIService(
         }
         logger.info("=== FIN HISTORIAL ===")
 
-        val systemPrompt = buildCoachSystemPrompt(activities, chatHistory, searchedActivities)
+        val firstName = userRepository.findById(userId).map { it.firstName }.orElse("atleta")
+        val systemPrompt = buildCoachSystemPrompt(activities, chatHistory, searchedActivities, firstName)
         logger.info("=== PROMPT BUILT with ${activities.size} activities ===")
 
         val messages = dbHistory.toMutableList()
@@ -491,7 +494,8 @@ class AIService(
     private fun buildCoachSystemPrompt(
         activities: List<ActivitySummary>,
         chatHistory: List<ChatMessage>,
-        searchedActivities: List<ActivitySummary> = emptyList()
+        searchedActivities: List<ActivitySummary> = emptyList(),
+        firstName: String = "atleta"
     ): String {
         val activityLines = activities.take(10).joinToString("\n") { a ->
             "- ${a.date} | ${a.type} | ${a.name} | ${a.distanceKm}km | " +
@@ -500,16 +504,20 @@ class AIService(
             "Desnivel: ${a.elevationGain.toInt()}m"
         }
 
-        val searchSection = if (searchedActivities.isNotEmpty()) {
-            val lines = searchedActivities.joinToString("\n") { a ->
-                "- ${a.date} | ${a.type} | ${a.name} | ${a.distanceKm}km | " +
-                "${a.movingTimeFormatted} | FC: ${a.avgHeartrate?.toInt() ?: "N/A"} bpm | " +
-                "TSS: ${a.tss ?: 0} | Desnivel: ${a.elevationGain.toInt()}m"
+        val activityContext = buildString {
+            if (activities.isNotEmpty()) appendLine(activityLines)
+            if (searchedActivities.isNotEmpty()) {
+                appendLine()
+                appendLine("Actividades encontradas por la consulta:")
+                searchedActivities.forEach { a ->
+                    appendLine(
+                        "- ${a.date} | ${a.type} | ${a.name} | ${a.distanceKm}km | " +
+                        "${a.movingTimeFormatted} | FC: ${a.avgHeartrate?.toInt() ?: "N/A"} bpm | " +
+                        "TSS: ${a.tss ?: 0} | Desnivel: ${a.elevationGain.toInt()}m"
+                    )
+                }
             }
-            "\n\n            ACTIVIDADES ENCONTRADAS POR BÚSQUEDA:\n" +
-            "            (Estas actividades se encontraron porque el usuario preguntó por ellas específicamente)\n" +
-            lines
-        } else ""
+        }.trim()
 
         val colombiaZone = ZoneId.of("America/Bogota")
         val now = ZonedDateTime.now(colombiaZone)
@@ -520,57 +528,28 @@ class AIService(
             .joinToString("\n") { "${it.role}: ${it.content}" }
 
         return """
-            Fecha y hora actual: $fechaActual (hora Colombia)
+            Eres un entrenador personal de ciclismo y deportes de resistencia.
 
-            Usa esto para:
-            - Saber cuándo fue la última actividad vs hoy
-            - Entender si el usuario va a salir hoy, mañana o lleva días sin entrenar
-            - Calcular días desde último encerado, cambio de llantas, etc.
+            CONTEXTO DEL ATLETA (extraído de sus datos reales):
+            Nombre: $firstName
+            Fecha actual: $fechaActual (hora Colombia)
 
-            Eres el entrenador personal de este atleta. Lo conoces bien.
+            ACTIVIDADES RECIENTES:
+            $activityContext
 
-            DATOS DE ACTIVIDADES RECIENTES:
-            $activityLines$searchSection
-
-            HISTORIAL RECIENTE DEL CHAT:
+            HISTORIAL DE CONVERSACIÓN:
             $historyContext
 
-            REGLAS DE COMPORTAMIENTO — CRÍTICAS:
-            1. SÉ DIRECTO. Responde la pregunta en la primera oración.
-               Mal: "Es importante considerar varios factores..."
-               Bien: "Sí, aplica cera antes de salir."
+            Del historial extrae y usa cualquier dato personal que el atleta
+            haya mencionado: peso, rutas habituales, objetivos, equipamiento,
+            lesiones, suplementos, mantenimiento de bici.
 
-            2. USA EL HISTORIAL. Si el atleta mencionó algo antes
-               (óxido, lesión, bici, objetivo) úsalo en tu respuesta.
-               Nunca ignores contexto previo.
+            Tono: directo, como alguien que lo conoce. Corto cuando la
+            pregunta es corta. Sin bullets ni emojis innecesarios. Sin frases
+            motivacionales de cierre. Una sola pregunta de seguimiento
+            si aporta — no siempre.
 
-            3. SÉ ESPECÍFICO. Usa sus datos reales:
-               Mal: "Has estado entrenando bien"
-               Bien: "Tu salida del 7 de mayo fue 36.6km con FC 136bpm"
-
-            4. RESPUESTAS CORTAS. Máximo 3 párrafos cortos.
-               Si la pregunta es simple, responde en 2-3 oraciones.
-
-            5. PREGUNTA DE SEGUIMIENTO. Termina con UNA pregunta
-               inteligente y específica cuando sea relevante.
-               Mal: "¿Tienes alguna duda?"
-               Bien: "¿La cadena se ve gris/seca o todavía brillante?"
-
-            6. NUNCA uses frases genéricas como:
-               - "Es fundamental para..."
-               - "Recuerda mantener..."
-               - "¡Sigue así!"
-               - "mantén la motivación"
-               - "garantizar un paseo óptimo"
-
-            7. NUNCA digas que no tienes datos si los tienes arriba.
-
-            8. Si preguntan de mantenimiento, nutrición, lesiones o
-               equipamiento — responde con criterio de entrenador real,
-               usando el contexto del historial si existe.
-
-            Idioma: español. Tono: directo, cercano, como un entrenador
-            de confianza. No como un asistente corporativo.
+            Si no tienes un dato, dilo en una frase y sigue.
         """.trimIndent()
     }
 }
