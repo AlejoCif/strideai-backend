@@ -399,7 +399,24 @@ class AIService(
     // ── Activity search ───────────────────────────────────────
 
     private fun searchRelevantActivities(userMessage: String, userId: Long): List<ActivitySummary> {
-        val words = userMessage.lowercase()
+        val message = userMessage.lowercase()
+        val bogotaZone = ZoneId.of("America/Bogota")
+        val today = LocalDate.now(bogotaZone)
+
+        val dateRange = detectDateRange(message, today)
+        if (dateRange != null) {
+            val (from, to) = dateRange
+            val fromInstant = from.atStartOfDay(bogotaZone).toInstant()
+            val toInstant = to.plusDays(1).atStartOfDay(bogotaZone).toInstant()
+            return activityRepository.findByUserIdAndDateRange(userId, fromInstant, toInstant)
+                .distinctBy { it.stravaId }
+                .sortedByDescending { it.startDateLocal }
+                .take(20)
+                .map { stravaService.toActivitySummary(it) }
+        }
+
+        // Fallback: name search using words > 4 chars
+        val words = message
             .split(" ", ",", ".", "?", "!")
             .filter { it.length > 4 }
             .distinct()
@@ -417,6 +434,100 @@ class AIService(
             .sortedByDescending { it.startDateLocal }
             .take(5)
             .map { stravaService.toActivitySummary(it) }
+    }
+
+    private fun detectDateRange(message: String, today: LocalDate): Pair<LocalDate, LocalDate>? {
+        val currentYear = today.year
+        val monthMap = mapOf(
+            "enero" to 1, "febrero" to 2, "marzo" to 3, "abril" to 4,
+            "mayo" to 5, "junio" to 6, "julio" to 7, "agosto" to 8,
+            "septiembre" to 9, "octubre" to 10, "noviembre" to 11, "diciembre" to 12
+        )
+
+        // 1. Fecha exacta: "el 15 de junio", "el 3 de marzo de 2025"
+        val exactDateRx = Regex("""el\s+(\d{1,2})\s+de\s+(\w+)(?:\s+(?:de|del)\s+(20\d{2}))?""")
+        exactDateRx.find(message)?.let { m ->
+            val day   = m.groupValues[1].toIntOrNull() ?: return@let
+            val month = monthMap[m.groupValues[2]] ?: return@let
+            val year  = m.groupValues[3].toIntOrNull()
+                ?: if (month > today.monthValue) currentYear - 1 else currentYear
+            val date  = runCatching { LocalDate.of(year, month, day) }.getOrNull() ?: return@let
+            return Pair(date, date)
+        }
+
+        // 2. Rango explícito: "desde enero hasta marzo", "de mayo a septiembre", "entre X y Y"
+        val rangeRxs = listOf(
+            Regex("""desde\s+(\w+)\s+(?:hasta|a)\s+(\w+)"""),
+            Regex("""de\s+(\w+)\s+a\s+(\w+)"""),
+            Regex("""entre\s+(\w+)\s+y\s+(\w+)""")
+        )
+        for (rx in rangeRxs) {
+            rx.find(message)?.let { m ->
+                val m1 = monthMap[m.groupValues[1]] ?: return@let
+                val m2 = monthMap[m.groupValues[2]] ?: return@let
+                val y1 = if (m1 > today.monthValue) currentYear - 1 else currentYear
+                val y2 = if (m2 < m1) y1 + 1 else y1
+                val from = LocalDate.of(y1, m1, 1)
+                val to   = LocalDate.of(y2, m2, 1).plusMonths(1).minusDays(1)
+                return Pair(from, to)
+            }
+        }
+
+        // 3. Mes + año explícito: "en mayo de 2025", "en julio del año pasado"
+        val monthYearRx = Regex("""en\s+(\w+)\s+(?:de|del)\s+(20\d{2}|año\s+pasado)""")
+        monthYearRx.find(message)?.let { m ->
+            val month = monthMap[m.groupValues[1]] ?: return@let
+            val year  = if (m.groupValues[2].contains("pasado")) currentYear - 1
+                        else m.groupValues[2].toIntOrNull() ?: return@let
+            val from  = LocalDate.of(year, month, 1)
+            return Pair(from, from.plusMonths(1).minusDays(1))
+        }
+
+        // 4. Relativos numéricos: "los últimos 3 meses", "hace 6 meses", "las últimas 4 semanas"
+        Regex("""(?:hace|[uú]ltimos?)\s+(\d+)\s+mes(?:es)?""").find(message)?.let { m ->
+            val n = m.groupValues[1].toLongOrNull() ?: return@let
+            return Pair(today.minusMonths(n), today)
+        }
+        Regex("""(?:hace|[uú]ltimas?)\s+(\d+)\s+semanas?""").find(message)?.let { m ->
+            val n = m.groupValues[1].toLongOrNull() ?: return@let
+            return Pair(today.minusWeeks(n), today)
+        }
+        Regex("""(?:hace|[uú]ltimos?)\s+(\d+)\s+d[ií]as?""").find(message)?.let { m ->
+            val n = m.groupValues[1].toLongOrNull() ?: return@let
+            return Pair(today.minusDays(n), today)
+        }
+
+        // 5. "por estas fechas el año pasado" / "hace un año"
+        if (message.contains("por estas fechas") ||
+            Regex("""hace\s+(?:un|una|1)\s+año""").containsMatchIn(message)) {
+            val anchor = today.minusYears(1)
+            return Pair(anchor.minusWeeks(1), anchor.plusWeeks(1))
+        }
+
+        // 6. Año completo: "el año pasado", "este año", "en 2024"
+        if (message.contains("año pasado") || message.contains("año anterior")) {
+            return Pair(LocalDate.of(currentYear - 1, 1, 1), LocalDate.of(currentYear - 1, 12, 31))
+        }
+        if (message.contains("este año")) {
+            return Pair(LocalDate.of(currentYear, 1, 1), today)
+        }
+        Regex("""\ben\s+(20\d{2})\b""").find(message)?.let { m ->
+            val y   = m.groupValues[1].toInt()
+            val end = if (y == currentYear) today else LocalDate.of(y, 12, 31)
+            return Pair(LocalDate.of(y, 1, 1), end)
+        }
+
+        // 7. Nombre de mes simple: "en enero", "en mayo"
+        for ((monthName, monthNum) in monthMap) {
+            if (message.contains("en $monthName") || message.contains("$monthName de") ||
+                message.contains("$monthName del") || message.contains("$monthName pasado")) {
+                val year = if (monthNum > today.monthValue) currentYear - 1 else currentYear
+                val from = LocalDate.of(year, monthNum, 1)
+                return Pair(from, from.plusMonths(1).minusDays(1))
+            }
+        }
+
+        return null
     }
 
     // ── Helpers ───────────────────────────────────────────────
@@ -549,6 +660,13 @@ class AIService(
             si aporta — no siempre.
 
             Si no tienes un dato, dilo en una frase y sigue.
+
+            Si el usuario pregunta por un rango de fechas, revisá
+            la fecha más antigua de las actividades que tenés disponibles.
+            Si ese rango no está cubierto completamente, declaralo en una
+            frase antes de responder — por ejemplo: "Solo tengo actividades
+            desde [fecha más antigua], así que el análisis es parcial."
+            No respondas con datos parciales como si fueran el total.
         """.trimIndent()
     }
 }

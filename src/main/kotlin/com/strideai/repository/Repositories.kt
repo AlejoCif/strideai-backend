@@ -33,6 +33,13 @@ interface ActivityRepository : JpaRepository<Activity, Long> {
         nativeQuery = true
     )
     fun findByUserIdAndMonth(@Param("userId") userId: Long, @Param("month") month: Int): List<Activity>
+
+    @Query("SELECT a FROM Activity a WHERE a.userId = :userId AND a.startDate >= :from AND a.startDate < :to ORDER BY a.startDate DESC")
+    fun findByUserIdAndDateRange(
+        @Param("userId") userId: Long,
+        @Param("from") from: Instant,
+        @Param("to") to: Instant
+    ): List<Activity>
 }
 
 @Repository
