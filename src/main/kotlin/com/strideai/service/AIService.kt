@@ -48,32 +48,16 @@ class AIService(
     fun chat(request: ChatRequest, userId: Long): ChatResponse {
         logger.info("=== CHAT CALLED for userId: $userId ===")
 
-        // Silent sync: upsert latest 10 activities from Strava, then use them directly
-        val activities: List<ActivitySummary> = try {
-            val recentFromStrava = stravaService.getRecentActivities(perPage = 10, page = 1)
-            recentFromStrava.forEach { dto ->
-                activityRepository.save(stravaService.toActivity(dto, userId))
-            }
-            logger.info("Auto-sync: updated ${recentFromStrava.size} activities for userId: $userId")
-            recentFromStrava.map { stravaService.toActivitySummary(it) }
-        } catch (e: Exception) {
-            logger.warn("Auto-sync failed, using cached data: ${e.message}")
-            activityRepository.findRecentByUserId(userId, 10)
-                .map { stravaService.toActivitySummary(it) }
-        }
+        // Read from DB — no live Strava call in the chat hot path
+        val activities: List<ActivitySummary> = activityRepository.findRecentByUserId(userId, 20)
+            .map { stravaService.toActivitySummary(it) }
+        logger.info("Loaded ${activities.size} activities from DB for userId: $userId")
 
         // Dynamic search: always search DB using words > 4 chars from user message
         val searchedActivities = searchRelevantActivities(request.message, userId)
         if (searchedActivities.isNotEmpty()) {
             logger.info("Found ${searchedActivities.size} activities matching: ${request.message}")
         }
-
-        logger.info("=== ACTIVIDADES PASADAS AL LLM ===")
-        logger.info("Total actividades: ${activities.size}")
-        activities.forEachIndexed { i, a ->
-            logger.info("[$i] ${a.date} | ${a.name} | ${a.distanceKm}km | FC: ${a.avgHeartrate}")
-        }
-        logger.info("=== FIN ACTIVIDADES ===")
 
         // Load persistent history from DB (up to 50 messages)
         val dbHistory = chatMessageRepository.findTop100ByUserIdOrderByCreatedAtAsc(userId)
@@ -501,7 +485,7 @@ class AIService(
         firstName: String = "atleta",
         profile: com.strideai.model.AthleteProfile? = null
     ): String {
-        val activityLines = activities.take(10).joinToString("\n") { a ->
+        val activityLines = activities.take(20).joinToString("\n") { a ->
             "- ${a.date} | ${a.type} | ${a.name} | ${a.distanceKm}km | " +
             "${a.movingTimeFormatted} | FC: ${a.avgHeartrate?.toInt() ?: "N/A"} bpm | " +
             "Cadencia: ${a.avgCadence?.toInt() ?: "N/A"} rpm | TSS: ${a.tss ?: 0} | " +
