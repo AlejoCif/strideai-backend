@@ -138,6 +138,19 @@ class StravaService(
         }
     }
 
+    fun fetchPageForBackfill(page: Int, perPage: Int = 200): List<StravaActivityDto> {
+        return try {
+            webClient.get()
+                .uri("$apiBaseUrl/athlete/activities?per_page=$perPage&page=$page")
+                .header("Authorization", "Bearer ${getValidToken()}")
+                .retrieve()
+                .bodyToMono<List<StravaActivityDto>>()
+                .block() ?: emptyList()
+        } catch (e: WebClientResponseException) {
+            handleStravaError(e)
+        }
+    }
+
     fun getActivityZones(activityId: Long): String? {
         return try {
             val token = getValidToken()

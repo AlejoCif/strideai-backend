@@ -6,6 +6,7 @@ import com.strideai.model.AthleteProfile as AthleteProfileEntity
 import com.strideai.repository.ActivityRepository
 import com.strideai.repository.ActivityZonesRepository
 import com.strideai.repository.AthleteProfileRepository
+import com.strideai.repository.UserRepository
 import com.strideai.service.AIService
 import com.strideai.service.AiUsageService
 import com.strideai.service.StravaService
@@ -113,8 +114,16 @@ class AthleteController(
 class ActivitiesController(
     private val stravaService: StravaService,
     private val activityRepository: ActivityRepository,
-    private val activityZonesRepository: ActivityZonesRepository
+    private val activityZonesRepository: ActivityZonesRepository,
+    private val userRepository: UserRepository
 ) {
+    @org.springframework.beans.factory.annotation.Value("\${app.admin-strava-id}")
+    private var adminStravaId: Long = 0
+
+    private val logger = org.slf4j.LoggerFactory.getLogger(ActivitiesController::class.java)
+
+    private fun isAdmin(userId: Long): Boolean =
+        userRepository.findById(userId).orElse(null)?.stravaId == adminStravaId
 
     @GetMapping
     fun getActivities(
@@ -224,6 +233,75 @@ class ActivitiesController(
         return ResponseEntity.ok(
             SyncResponse(synced = stravaActivities.size, success = true, zonesUpdated = zonesUpdated)
         )
+    }
+
+    @PostMapping("/backfill")
+    fun backfillHistory(): ResponseEntity<Map<String, Any>> {
+        val userId = SecurityContextHolder.getContext().authentication.principal as Long
+
+        if (!isAdmin(userId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(mapOf("error" to "Admin only"))
+        }
+
+        var inserted = 0
+        var skipped = 0
+        var page = 1
+        var rateLimited = false
+        var errorPage: Int? = null
+
+        logger.info("Backfill started for userId=$userId")
+
+        loop@ while (true) {
+            val batch: List<com.strideai.dto.StravaActivityDto> = try {
+                stravaService.fetchPageForBackfill(page = page, perPage = 200)
+            } catch (e: RuntimeException) {
+                if (e.message == "STRAVA_RATE_LIMITED") {
+                    logger.warn("Backfill: Strava rate limit hit on page $page — stopping early")
+                    rateLimited = true
+                    break@loop
+                }
+                logger.error("Backfill: error on page $page — ${e.message}")
+                errorPage = page
+                break@loop
+            }
+
+            if (batch.isEmpty()) {
+                logger.info("Backfill: page $page returned empty — done")
+                break@loop
+            }
+
+            for (dto in batch) {
+                if (activityRepository.findByStravaId(dto.id) != null) {
+                    skipped++
+                } else {
+                    activityRepository.save(stravaService.toActivity(dto, userId))
+                    inserted++
+                }
+            }
+
+            logger.info("Backfill page $page: +$inserted inserted, $skipped skipped so far")
+            Thread.sleep(300)
+            page++
+        }
+
+        val totalInDb   = activityRepository.countByUserId(userId)
+        val minDate     = activityRepository.findMinStartDate(userId)?.toString() ?: "—"
+        val maxDate     = activityRepository.findMaxStartDate(userId)?.toString() ?: "—"
+
+        val result = mutableMapOf<String, Any>(
+            "inserted"    to inserted,
+            "skipped"     to skipped,
+            "totalInDb"   to totalInDb,
+            "dateRangeMin" to minDate,
+            "dateRangeMax" to maxDate,
+            "pagesProcessed" to page - 1
+        )
+        if (rateLimited) result["warning"] = "Stopped early due to Strava rate limit"
+        if (errorPage != null) result["errorPage"] = errorPage
+
+        logger.info("Backfill complete: $result")
+        return ResponseEntity.ok(result)
     }
 }
 

@@ -40,6 +40,14 @@ interface ActivityRepository : JpaRepository<Activity, Long> {
         @Param("from") from: Instant,
         @Param("to") to: Instant
     ): List<Activity>
+
+    @Query("SELECT MIN(a.startDate) FROM Activity a WHERE a.userId = :userId")
+    fun findMinStartDate(@Param("userId") userId: Long): Instant?
+
+    @Query("SELECT MAX(a.startDate) FROM Activity a WHERE a.userId = :userId")
+    fun findMaxStartDate(@Param("userId") userId: Long): Instant?
+
+    fun countByUserId(userId: Long): Long
 }
 
 @Repository
