@@ -76,13 +76,9 @@ class AIService(
         val systemPrompt = buildCoachSystemPrompt(activities, chatHistory, searchedActivities, firstName, athleteProfile)
         logger.info("=== PROMPT BUILT with ${activities.size} activities ===")
 
-        val messages = dbHistory.toMutableList()
+        val cleanHistory = sanitizeHistory(dbHistory, userId)
+        val messages = cleanHistory.toMutableList()
         messages.add(ChatMessage(role = "user", content = request.message))
-
-        // Persist user message
-        chatMessageRepository.save(
-            ChatMessageEntity(userId = userId, role = "user", content = request.message)
-        )
 
         val reply = try {
             callAI(systemPrompt, messages)
@@ -93,10 +89,9 @@ class AIService(
             throw e
         }
 
-        // Persist assistant reply
-        chatMessageRepository.save(
-            ChatMessageEntity(userId = userId, role = "assistant", content = reply)
-        )
+        // Persist both atomically — only once AI has responded successfully
+        chatMessageRepository.save(ChatMessageEntity(userId = userId, role = "user", content = request.message))
+        chatMessageRepository.save(ChatMessageEntity(userId = userId, role = "assistant", content = reply))
 
         return ChatResponse(reply = reply)
     }
@@ -531,6 +526,24 @@ class AIService(
     }
 
     // ── Helpers ───────────────────────────────────────────────
+
+    private fun sanitizeHistory(history: List<ChatMessage>, userId: Long): List<ChatMessage> {
+        val result = mutableListOf<ChatMessage>()
+        for (msg in history) {
+            val last = result.lastOrNull()
+            if (last != null && last.role == msg.role) {
+                logger.warn("sanitizeHistory: merging consecutive '${msg.role}' turns for userId=$userId")
+                result[result.lastIndex] = ChatMessage(role = last.role, content = last.content + "\n" + msg.content)
+            } else {
+                result.add(msg)
+            }
+        }
+        if (result.firstOrNull()?.role == "assistant") {
+            logger.warn("sanitizeHistory: discarding leading 'assistant' message for userId=$userId")
+            result.removeAt(0)
+        }
+        return result
+    }
 
     private fun buildActivitiesHash(activities: List<ActivitySummary>): String {
         val data = activities.joinToString("|") {
