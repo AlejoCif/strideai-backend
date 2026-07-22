@@ -130,7 +130,7 @@ class AIService(
             - ATL estimado: ${atlEstimate.toInt()} pts
             - TSB estimado: ${tsb.toInt()} pts
             - TSS semana actual: $weeklyTss pts
-            - Actividades recientes: ${recentActivities.take(5).joinToString { "${it.type} ${it.distanceKm}km" }}
+            - Actividades recientes: ${recentActivities.take(5).joinToString { "${it.type}${it.distanceKm?.let { d -> " ${d}km" } ?: ""}" }}
             ${request.goal?.let { "- Objetivo: $it" } ?: ""}
             ${request.weeksToEvent?.let { "- Semanas para el evento: $it" } ?: ""}
 
@@ -234,7 +234,7 @@ class AIService(
         }
 
         val activityLines = activities.take(10).joinToString("\n") {
-            "- ${it.date}: ${it.type}, ${it.distanceKm} km, ${it.movingTimeFormatted}, " +
+            "- ${it.date}: ${it.type}, ${it.distanceKm?.let { d -> "$d km" } ?: "—"}, ${it.movingTimeFormatted}, " +
                 "TSS: ${it.tss ?: 0}, FC media: ${it.avgHeartrate?.toInt()?.toString() ?: "N/A"} bpm, " +
                 "Potencia media: ${it.avgWatts?.toInt()?.toString() ?: "N/A"} W"
         }
@@ -317,7 +317,7 @@ class AIService(
         if (activities.isEmpty()) return "No hay suficientes actividades para generar análisis."
 
         val week = activities.take(7)
-        val totalKm = week.sumOf { it.distanceKm }
+        val totalKm = week.sumOf { it.distanceKm ?: 0.0 }
         val totalTss = week.sumOf { it.tss ?: 0 }
         val avgHr = week.mapNotNull { it.avgHeartrate }
             .let { hrs -> if (hrs.isEmpty()) null else hrs.average().roundToInt() }
@@ -610,10 +610,10 @@ class AIService(
         profile: com.strideai.model.AthleteProfile? = null
     ): String {
         val activityLines = activities.take(20).joinToString("\n") { a ->
-            "- ${a.date} | ${a.type} | ${a.name} | ${a.distanceKm}km | " +
+            "- ${a.date} | ${a.type} | ${a.name} | ${a.distanceKm?.let { "${it}km" } ?: "—"} | " +
             "${a.movingTimeFormatted} | FC: ${a.avgHeartrate?.toInt() ?: "N/A"} bpm | " +
             "Cadencia: ${a.avgCadence?.toInt() ?: "N/A"} rpm | TSS: ${a.tss ?: 0} | " +
-            "Desnivel: ${a.elevationGain.toInt()}m"
+            "Desnivel: ${a.elevationGain?.toInt()?.let { "${it}m" } ?: "—"}"
         }
 
         val activityContext = buildString {
@@ -623,9 +623,9 @@ class AIService(
                 appendLine("Actividades encontradas por la consulta:")
                 searchedActivities.forEach { a ->
                     appendLine(
-                        "- ${a.date} | ${a.type} | ${a.name} | ${a.distanceKm}km | " +
+                        "- ${a.date} | ${a.type} | ${a.name} | ${a.distanceKm?.let { "${it}km" } ?: "—"} | " +
                         "${a.movingTimeFormatted} | FC: ${a.avgHeartrate?.toInt() ?: "N/A"} bpm | " +
-                        "TSS: ${a.tss ?: 0} | Desnivel: ${a.elevationGain.toInt()}m"
+                        "TSS: ${a.tss ?: 0} | Desnivel: ${a.elevationGain?.toInt()?.let { "${it}m" } ?: "—"}"
                     )
                 }
             }
