@@ -20,7 +20,7 @@ class AnthropicAIProvider(
     @Value("\${app.anthropic.api-url}") private lateinit var apiUrl: String
     @Value("\${app.anthropic.model}") private lateinit var model: String
 
-    override fun generate(systemPrompt: String, messages: List<ChatMessage>, maxTokens: Int): String {
+    override fun generate(systemPrompt: String, messages: List<ChatMessage>, maxTokens: Int): ProviderResult {
         val safeMessages = sanitize(messages)
         if (safeMessages.isEmpty()) throw RuntimeException("Cannot call Anthropic with empty messages")
 
@@ -52,8 +52,15 @@ class AnthropicAIProvider(
             throw e
         } ?: throw RuntimeException("No response from Anthropic")
 
-        return response.content.firstOrNull()?.text
+        val text = response.content.firstOrNull()?.text
             ?: throw RuntimeException("Empty response from Anthropic")
+
+        return ProviderResult(
+            text = text,
+            inputTokens  = response.usage?.input_tokens  ?: 0,
+            outputTokens = response.usage?.output_tokens ?: 0,
+            provider = "anthropic"
+        )
     }
 
     private fun sanitize(messages: List<ChatMessage>) = messages

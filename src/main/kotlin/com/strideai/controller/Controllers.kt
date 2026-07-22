@@ -5,6 +5,7 @@ import com.strideai.model.ActivityZones
 import com.strideai.model.AthleteProfile as AthleteProfileEntity
 import com.strideai.repository.ActivityRepository
 import com.strideai.repository.ActivityZonesRepository
+import com.strideai.repository.AiUsageLogRepository
 import com.strideai.repository.AthleteProfileRepository
 import com.strideai.repository.UserRepository
 import com.strideai.service.AIService
@@ -376,4 +377,62 @@ class AIController(
 
     private fun currentUserId(): Long =
         SecurityContextHolder.getContext().authentication.principal as Long
+}
+
+// ── Admin ─────────────────────────────────────────────────
+
+// Precios por millón de tokens (USD) — actualizar aquí si cambian las tarifas
+private const val ANTHROPIC_INPUT_COST_PER_M  = 3.00
+private const val ANTHROPIC_OUTPUT_COST_PER_M = 15.00
+private const val OPENAI_INPUT_COST_PER_M     = 0.15
+private const val OPENAI_OUTPUT_COST_PER_M    = 0.60
+
+@RestController
+@RequestMapping("/api/admin")
+class AdminController(
+    private val aiUsageLogRepository: AiUsageLogRepository,
+    private val userRepository: UserRepository
+) {
+    @org.springframework.beans.factory.annotation.Value("\${app.admin-strava-id}")
+    private var adminStravaId: Long = 0
+
+    private fun isAdmin(userId: Long): Boolean =
+        userRepository.findById(userId).orElse(null)?.stravaId == adminStravaId
+
+    @GetMapping("/usage-total")
+    fun getUsageTotal(): ResponseEntity<Any> {
+        val userId = SecurityContextHolder.getContext().authentication.principal as Long
+        if (!isAdmin(userId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(mapOf("error" to "Admin only"))
+        }
+
+        val anthropicIn  = aiUsageLogRepository.sumInputTokens("anthropic")
+        val anthropicOut = aiUsageLogRepository.sumOutputTokens("anthropic")
+        val openaiIn     = aiUsageLogRepository.sumInputTokens("openai")
+        val openaiOut    = aiUsageLogRepository.sumOutputTokens("openai")
+        val totalMessages = aiUsageLogRepository.count()
+
+        val anthropicCost = (anthropicIn  / 1_000_000.0) * ANTHROPIC_INPUT_COST_PER_M +
+                            (anthropicOut / 1_000_000.0) * ANTHROPIC_OUTPUT_COST_PER_M
+        val openaiCost    = (openaiIn     / 1_000_000.0) * OPENAI_INPUT_COST_PER_M +
+                            (openaiOut    / 1_000_000.0) * OPENAI_OUTPUT_COST_PER_M
+        val totalUSD      = anthropicCost + openaiCost
+
+        return ResponseEntity.ok(mapOf(
+            "totalUSD"      to Math.round(totalUSD * 10000) / 10000.0,
+            "totalMessages" to totalMessages,
+            "byProvider" to mapOf(
+                "anthropic" to mapOf(
+                    "costUSD"      to Math.round(anthropicCost * 10000) / 10000.0,
+                    "inputTokens"  to anthropicIn,
+                    "outputTokens" to anthropicOut
+                ),
+                "openai" to mapOf(
+                    "costUSD"      to Math.round(openaiCost * 10000) / 10000.0,
+                    "inputTokens"  to openaiIn,
+                    "outputTokens" to openaiOut
+                )
+            )
+        ))
+    }
 }

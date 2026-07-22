@@ -131,8 +131,14 @@ data class AnthropicRequest(
     val messages: List<ChatMessage>
 )
 
+data class AnthropicUsage(
+    val input_tokens: Int,
+    val output_tokens: Int
+)
+
 data class AnthropicResponse(
-    val content: List<AnthropicContent>
+    val content: List<AnthropicContent>,
+    val usage: AnthropicUsage? = null
 )
 
 data class AnthropicContent(

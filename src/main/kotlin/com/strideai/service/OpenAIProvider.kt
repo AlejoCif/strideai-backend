@@ -17,7 +17,8 @@ private data class OpenAIRequest(
 
 private data class OpenAIMessage(val role: String, val content: String)
 
-private data class OpenAIResponse(val choices: List<OpenAIChoice>)
+private data class OpenAIUsage(val prompt_tokens: Int, val completion_tokens: Int)
+private data class OpenAIResponse(val choices: List<OpenAIChoice>, val usage: OpenAIUsage? = null)
 private data class OpenAIChoice(val message: OpenAIMessage)
 
 // ── Provider ──────────────────────────────────────────────
@@ -29,7 +30,7 @@ class OpenAIProvider(private val webClient: WebClient) : AIProvider {
     @Value("\${app.openai.api-url}") private lateinit var apiUrl: String
     @Value("\${app.openai.model}") private lateinit var model: String
 
-    override fun generate(systemPrompt: String, messages: List<ChatMessage>, maxTokens: Int): String {
+    override fun generate(systemPrompt: String, messages: List<ChatMessage>, maxTokens: Int): ProviderResult {
         val openAiMessages = buildList {
             add(OpenAIMessage(role = "system", content = systemPrompt.trim()))
             messages
@@ -68,7 +69,14 @@ class OpenAIProvider(private val webClient: WebClient) : AIProvider {
             throw e
         } ?: throw RuntimeException("No response from OpenAI")
 
-        return response.choices.firstOrNull()?.message?.content
+        val text = response.choices.firstOrNull()?.message?.content
             ?: throw RuntimeException("Empty response from OpenAI")
+
+        return ProviderResult(
+            text = text,
+            inputTokens  = response.usage?.prompt_tokens     ?: 0,
+            outputTokens = response.usage?.completion_tokens ?: 0,
+            provider = "openai"
+        )
     }
 }

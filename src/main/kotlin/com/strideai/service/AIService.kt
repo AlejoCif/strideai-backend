@@ -6,7 +6,9 @@ import com.fasterxml.jackson.module.kotlin.readValue
 import com.strideai.model.AiAnalysis
 import com.strideai.model.ChatMessage as ChatMessageEntity
 import com.strideai.model.TrainingPlan
+import com.strideai.model.AiUsageLog
 import com.strideai.repository.AiAnalysisRepository
+import com.strideai.repository.AiUsageLogRepository
 import com.strideai.repository.ActivityRepository
 import com.strideai.repository.ActivityZonesRepository
 import com.strideai.repository.AthleteProfileRepository
@@ -33,6 +35,7 @@ class AIService(
     private val trainingPlanRepository: TrainingPlanRepository,
     private val aiAnalysisRepository: AiAnalysisRepository,
     private val chatMessageRepository: ChatMessageRepository,
+    private val aiUsageLogRepository: AiUsageLogRepository,
     private val activityRepository: ActivityRepository,
     private val activityZonesRepository: ActivityZonesRepository,
     private val userRepository: UserRepository,
@@ -80,7 +83,7 @@ class AIService(
         val messages = cleanHistory.toMutableList()
         messages.add(ChatMessage(role = "user", content = request.message))
 
-        val reply = try {
+        val result = try {
             callAI(systemPrompt, messages)
         } catch (e: RuntimeException) {
             if (e.message == "AI_UNAVAILABLE") {
@@ -89,11 +92,17 @@ class AIService(
             throw e
         }
 
-        // Persist both atomically — only once AI has responded successfully
+        // Persist messages + usage log atomically — only once AI has responded successfully
         chatMessageRepository.save(ChatMessageEntity(userId = userId, role = "user", content = request.message))
-        chatMessageRepository.save(ChatMessageEntity(userId = userId, role = "assistant", content = reply))
+        chatMessageRepository.save(ChatMessageEntity(userId = userId, role = "assistant", content = result.text))
+        aiUsageLogRepository.save(AiUsageLog(
+            userId = userId,
+            provider = result.provider,
+            inputTokens = result.inputTokens,
+            outputTokens = result.outputTokens
+        ))
 
-        return ChatResponse(reply = reply)
+        return ChatResponse(reply = result.text)
     }
 
     fun getChatHistory(userId: Long): List<Map<String, String>> =
@@ -150,7 +159,7 @@ class AIService(
         logger.info("generatePlan: calling AI for userId=$userId provider=$aiProviderName")
 
         val planJson = try {
-            val json = callAI(systemPrompt, listOf(ChatMessage(role = "user", content = userMessage)))
+            val json = callAI(systemPrompt, listOf(ChatMessage(role = "user", content = userMessage))).text
             logger.info("generatePlan: AI responded OK, length=${json.length}")
             json
         } catch (e: RuntimeException) {
@@ -260,7 +269,7 @@ class AIService(
         """.trimIndent()
 
         val analysis = try {
-            callAI(systemPrompt, listOf(ChatMessage(role = "user", content = userMessage)))
+            callAI(systemPrompt, listOf(ChatMessage(role = "user", content = userMessage))).text
         } catch (e: RuntimeException) {
             if (e.message == "AI_UNAVAILABLE") {
                 return generateFallbackAnalysis(activities)
@@ -281,7 +290,7 @@ class AIService(
         systemPrompt: String,
         messages: List<ChatMessage>,
         maxTokens: Int = 1500
-    ): String {
+    ): ProviderResult {
         val primary = aiProviderName.lowercase().trim()
 
         try {
