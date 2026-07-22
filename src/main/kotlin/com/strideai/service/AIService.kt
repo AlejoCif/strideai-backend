@@ -610,10 +610,15 @@ class AIService(
         profile: com.strideai.model.AthleteProfile? = null
     ): String {
         val activityLines = activities.take(20).joinToString("\n") { a ->
-            "- ${a.date} | ${a.type} | ${a.name} | ${a.distanceKm?.let { "${it}km" } ?: "—"} | " +
-            "${a.movingTimeFormatted} | FC: ${a.avgHeartrate?.toInt() ?: "N/A"} bpm | " +
-            "Cadencia: ${a.avgCadence?.toInt() ?: "N/A"} rpm | TSS: ${a.tss ?: 0} | " +
-            "Desnivel: ${a.elevationGain?.toInt()?.let { "${it}m" } ?: "—"}"
+            buildString {
+                append("- ${a.date} | ${a.type} | ${a.name}")
+                a.distanceKm?.let { append(" | ${it}km") } ?: append(" | —")
+                append(" | ${a.movingTimeFormatted}")
+                a.avgHeartrate?.let { append(" | FC: ${it.toInt()} bpm") }
+                a.avgCadence?.let  { append(" | Cadencia: ${it.toInt()} rpm") }
+                append(" | TSS: ${a.tss ?: 0}")
+                a.elevationGain?.let { append(" | Desnivel: ${it.toInt()}m") } ?: append(" | Desnivel: —")
+            }
         }
 
         val activityContext = buildString {
@@ -622,11 +627,14 @@ class AIService(
                 appendLine()
                 appendLine("Actividades encontradas por la consulta:")
                 searchedActivities.forEach { a ->
-                    appendLine(
-                        "- ${a.date} | ${a.type} | ${a.name} | ${a.distanceKm?.let { "${it}km" } ?: "—"} | " +
-                        "${a.movingTimeFormatted} | FC: ${a.avgHeartrate?.toInt() ?: "N/A"} bpm | " +
-                        "TSS: ${a.tss ?: 0} | Desnivel: ${a.elevationGain?.toInt()?.let { "${it}m" } ?: "—"}"
-                    )
+                    appendLine(buildString {
+                        append("- ${a.date} | ${a.type} | ${a.name}")
+                        a.distanceKm?.let { append(" | ${it}km") } ?: append(" | —")
+                        append(" | ${a.movingTimeFormatted}")
+                        a.avgHeartrate?.let { append(" | FC: ${it.toInt()} bpm") }
+                        append(" | TSS: ${a.tss ?: 0}")
+                        a.elevationGain?.let { append(" | Desnivel: ${it.toInt()}m") } ?: append(" | Desnivel: —")
+                    })
                 }
             }
         }.trim()
@@ -649,7 +657,7 @@ class AIService(
             .joinToString("\n") { "${it.role}: ${it.content}" }
 
         return """
-            Eres un entrenador personal de ciclismo y deportes de resistencia.
+            Eres un entrenador personal de ciclismo, deportes de resistencia y entrenamiento de fuerza.
 
             CONTEXTO DEL ATLETA (extraído de sus datos reales):
             Nombre: $firstName
@@ -665,7 +673,7 @@ class AIService(
 
             Del historial extrae y usa cualquier dato personal que el atleta
             haya mencionado: peso, rutas habituales, objetivos, equipamiento,
-            lesiones, suplementos, mantenimiento de bici.
+            lesiones, suplementos, mantenimiento de bici, rutinas de gym y cargas de fuerza.
 
             Tono: directo, como alguien que lo conoce. Corto cuando la
             pregunta es corta. Sin bullets ni emojis innecesarios. Sin frases
@@ -673,6 +681,11 @@ class AIService(
             si aporta — no siempre.
 
             Si no tienes un dato, dilo en una frase y sigue.
+
+            El TSS de actividades de resistencia refleja carga real (por potencia
+            o FC). Para actividades de fuerza/gym sin sensores es una estimación
+            por duración — si el atleta pregunta por diferencias de TSS entre
+            tipos de actividad, explicá esto en vez de inferir otra causa.
 
             Si el usuario pregunta por un rango de fechas, revisá
             la fecha más antigua de las actividades que tenés disponibles.
