@@ -28,7 +28,7 @@ server:
 app:
   frontend-url: ${FRONTEND_URL:http://localhost:5173}
   jwt-secret: ${JWT_SECRET:strideai-default-secret-change-in-production}
-  admin-strava-id: ${ADMIN_STRAVA_ID:93679049}
+  admin-strava-id: ${ADMIN_STRAVA_ID}
   ai:
     provider: ${AI_PROVIDER:anthropic}
   openai:

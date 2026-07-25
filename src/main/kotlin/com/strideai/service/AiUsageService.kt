@@ -1,6 +1,5 @@
 package com.strideai.service
 
-import com.strideai.model.AiUsage
 import com.strideai.repository.AiUsageRepository
 import com.strideai.repository.UserRepository
 import org.springframework.beans.factory.annotation.Value
@@ -18,22 +17,7 @@ class AiUsageService(
 
     fun checkAndIncrementChat(userId: Long): Boolean {
         if (isAdmin(userId)) return true
-
-        val today = LocalDate.now()
-        val usage = aiUsageRepository.findByUserIdAndDate(userId, today)
-
-        return when {
-            usage == null -> {
-                aiUsageRepository.save(AiUsage(userId = userId, date = today, chatCount = 1))
-                true
-            }
-            usage.chatCount < CHAT_LIMIT -> {
-                usage.chatCount++
-                aiUsageRepository.save(usage)
-                true
-            }
-            else -> false
-        }
+        return aiUsageRepository.incrementIfUnderLimit(userId, LocalDate.now(), CHAT_LIMIT) > 0
     }
 
     fun getUsage(userId: Long): Map<String, Any> {

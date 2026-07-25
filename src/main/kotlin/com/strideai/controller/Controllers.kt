@@ -192,9 +192,8 @@ class ActivitiesController(
         var updated = 0
 
         for (dto in stravaActivities) {
-            val existing = activityRepository.findByStravaId(dto.id)
+            val existing = activityRepository.findByStravaIdAndUserId(dto.id, userId)
             val activity = stravaService.toActivity(dto, userId).let { new ->
-                // Preserve original createdAt when updating
                 if (existing != null) new.copy(createdAt = existing.createdAt)
                 else new
             }
@@ -276,7 +275,7 @@ class ActivitiesController(
             }
 
             for (dto in batch) {
-                if (activityRepository.findByStravaId(dto.id) != null) {
+                if (activityRepository.findByStravaIdAndUserId(dto.id, userId) != null) {
                     skipped++
                 } else {
                     activityRepository.save(stravaService.toActivity(dto, userId))

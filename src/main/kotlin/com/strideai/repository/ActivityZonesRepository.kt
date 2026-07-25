@@ -6,6 +6,5 @@ import org.springframework.stereotype.Repository
 
 @Repository
 interface ActivityZonesRepository : JpaRepository<ActivityZones, Long> {
-    fun findByStravaActivityId(id: Long): ActivityZones?
     fun findByUserIdOrderByCreatedAtDesc(userId: Long): List<ActivityZones>
 }

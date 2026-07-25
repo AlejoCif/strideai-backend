@@ -33,7 +33,7 @@ class SecurityConfig(
                     .requestMatchers("/auth/**").permitAll()
                     .requestMatchers("/login/**", "/oauth2/**").permitAll()
                     .requestMatchers("/api/**").authenticated()
-                    .anyRequest().permitAll()
+                    .anyRequest().denyAll()
             }
             .exceptionHandling { ex ->
                 ex.authenticationEntryPoint { _, response, _ ->
