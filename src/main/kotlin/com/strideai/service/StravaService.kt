@@ -25,52 +25,19 @@ class StravaService(
 
     private val logger = LoggerFactory.getLogger(StravaService::class.java)
 
-    // In-memory cache — survives multiple requests, cleared on restart.
-    // DB is the source of truth after a server restart.
-    @Volatile private var cachedAccessToken: String? = null
-    @Volatile private var cachedTokenExpiresAt: Long = 0
-
-    // Called from StravaAuthController after OAuth to prime the in-memory cache
-    // without an extra DB read (tokens already persisted by upsertUser).
-    fun updateTokenCache(accessToken: String, refreshToken: String, expiresAt: Long) {
-        cachedAccessToken = accessToken
-        cachedTokenExpiresAt = expiresAt
-    }
-
     // ── Token management ──────────────────────────────────────
 
-    /**
-     * Returns a valid access token for [userId].
-     * Reads from DB, refreshes with Strava if expiring, persists new tokens.
-     * Throws RuntimeException("STRAVA_AUTH_REVOKED") if refresh token is invalid.
-     */
     fun getValidToken(userId: Long): String {
         val now = Instant.now().epochSecond
         val user = userRepository.findById(userId).orElse(null)
             ?: throw RuntimeException("User not found: $userId")
 
         if (user.tokenExpiresAt > now + 300) {
-            cachedAccessToken = user.accessToken
-            cachedTokenExpiresAt = user.tokenExpiresAt
             return user.accessToken
         }
 
         logger.info("Strava token expired for userId=$userId, refreshing...")
         return refreshAndPersist(user.refreshToken, userId)
-    }
-
-    /**
-     * No-arg overload: uses in-memory cache first, then first DB user.
-     * Used by call sites that don't have a userId (e.g. AIService analysis).
-     */
-    fun getValidToken(): String {
-        val now = Instant.now().epochSecond
-        if (cachedAccessToken != null && cachedTokenExpiresAt > now + 300) {
-            return cachedAccessToken!!
-        }
-        val user = userRepository.findAll().firstOrNull()
-            ?: throw RuntimeException("No authenticated Strava user found")
-        return getValidToken(user.id)
     }
 
     private fun refreshAndPersist(refreshToken: String, userId: Long): String {
@@ -103,20 +70,17 @@ class StravaService(
             ))
         }
 
-        cachedAccessToken = response.access_token
-        cachedTokenExpiresAt = response.expires_at
-
         logger.info("Strava token refreshed for userId=$userId, expires: ${Instant.ofEpochSecond(response.expires_at)}")
         return response.access_token
     }
 
     // ── Strava API calls ──────────────────────────────────────
 
-    fun getAthlete(): StravaAthleteDto {
+    fun getAthlete(userId: Long): StravaAthleteDto {
         return try {
             webClient.get()
                 .uri("$apiBaseUrl/athlete")
-                .header("Authorization", "Bearer ${getValidToken()}")
+                .header("Authorization", "Bearer ${getValidToken(userId)}")
                 .retrieve()
                 .bodyToMono<StravaAthleteDto>()
                 .block() ?: throw RuntimeException("Failed to fetch athlete")
@@ -125,11 +89,11 @@ class StravaService(
         }
     }
 
-    fun getRecentActivities(perPage: Int = 30, page: Int = 1): List<StravaActivityDto> {
+    fun getRecentActivities(userId: Long, perPage: Int = 30, page: Int = 1): List<StravaActivityDto> {
         return try {
             webClient.get()
                 .uri("$apiBaseUrl/athlete/activities?per_page=$perPage&page=$page")
-                .header("Authorization", "Bearer ${getValidToken()}")
+                .header("Authorization", "Bearer ${getValidToken(userId)}")
                 .retrieve()
                 .bodyToMono<List<StravaActivityDto>>()
                 .block() ?: emptyList()
@@ -138,11 +102,11 @@ class StravaService(
         }
     }
 
-    fun fetchPageForBackfill(page: Int, perPage: Int = 200): List<StravaActivityDto> {
+    fun fetchPageForBackfill(userId: Long, page: Int, perPage: Int = 200): List<StravaActivityDto> {
         return try {
             webClient.get()
                 .uri("$apiBaseUrl/athlete/activities?per_page=$perPage&page=$page")
-                .header("Authorization", "Bearer ${getValidToken()}")
+                .header("Authorization", "Bearer ${getValidToken(userId)}")
                 .retrieve()
                 .bodyToMono<List<StravaActivityDto>>()
                 .block() ?: emptyList()
@@ -151,12 +115,11 @@ class StravaService(
         }
     }
 
-    fun getActivityZones(activityId: Long): String? {
+    fun getActivityZones(activityId: Long, userId: Long): String? {
         return try {
-            val token = getValidToken()
             val raw = webClient.get()
                 .uri("$apiBaseUrl/activities/$activityId/zones")
-                .header("Authorization", "Bearer $token")
+                .header("Authorization", "Bearer ${getValidToken(userId)}")
                 .retrieve()
                 .bodyToMono(String::class.java)
                 .block()
@@ -168,11 +131,11 @@ class StravaService(
         }
     }
 
-    fun getActivitiesSince(epochSeconds: Long): List<StravaActivityDto> {
+    fun getActivitiesSince(epochSeconds: Long, userId: Long): List<StravaActivityDto> {
         return try {
             webClient.get()
                 .uri("$apiBaseUrl/athlete/activities?after=$epochSeconds&per_page=100")
-                .header("Authorization", "Bearer ${getValidToken()}")
+                .header("Authorization", "Bearer ${getValidToken(userId)}")
                 .retrieve()
                 .bodyToMono<List<StravaActivityDto>>()
                 .block() ?: emptyList()

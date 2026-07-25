@@ -115,7 +115,7 @@ class AIService(
 
     fun generatePlan(request: GeneratePlanRequest, userId: Long): TrainingPlanData {
         val recentActivities = try {
-            stravaService.getRecentActivities(perPage = 20)
+            stravaService.getRecentActivities(userId = userId, perPage = 20)
                 .map { stravaService.toActivitySummary(it) }
         } catch (e: Exception) {
             emptyList()
@@ -224,7 +224,7 @@ class AIService(
 
     fun analyzePerformance(userId: Long): String {
         val activities = try {
-            stravaService.getRecentActivities(perPage = 20)
+            stravaService.getRecentActivities(userId = userId, perPage = 20)
                 .map { stravaService.toActivitySummary(it) }
         } catch (e: Exception) {
             return "No se pudieron cargar las actividades de Strava."

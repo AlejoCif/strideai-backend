@@ -6,7 +6,6 @@ import com.strideai.dto.StravaTokenResponse
 import com.strideai.model.User
 import com.strideai.repository.UserRepository
 import com.strideai.security.JwtService
-import com.strideai.service.StravaService
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.*
 import org.springframework.stereotype.Controller
@@ -21,7 +20,6 @@ import java.time.Instant
 @Controller
 class StravaAuthController(
     private val userRepository: UserRepository,
-    private val stravaService: StravaService,
     private val jwtService: JwtService,
     private val objectMapper: ObjectMapper
 ) {
@@ -59,12 +57,6 @@ class StravaAuthController(
                 ?: return "redirect:$frontendUrl/login?error=missing_athlete"
 
             val user = upsertUser(tokenResponse, athlete)
-
-            stravaService.updateTokenCache(
-                tokenResponse.access_token,
-                tokenResponse.refresh_token,
-                tokenResponse.expires_at
-            )
 
             val jwt = jwtService.generateToken(userId = user.id, stravaId = athlete.id)
             "redirect:$frontendUrl/dashboard?token=$jwt"

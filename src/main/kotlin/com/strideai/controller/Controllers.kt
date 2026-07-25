@@ -43,7 +43,8 @@ class AthleteController(
 
     @GetMapping
     fun getAthlete(): ResponseEntity<AthleteProfile> {
-        val athlete = stravaService.getAthlete()
+        val userId = SecurityContextHolder.getContext().authentication.principal as Long
+        val athlete = stravaService.getAthlete(userId)
         return ResponseEntity.ok(
             AthleteProfile(
                 stravaId = athlete.id,
@@ -131,14 +132,16 @@ class ActivitiesController(
         @RequestParam(defaultValue = "20") limit: Int,
         @RequestParam(defaultValue = "1") page: Int
     ): ResponseEntity<List<ActivitySummary>> {
-        val activities = stravaService.getRecentActivities(perPage = limit, page = page)
+        val userId = SecurityContextHolder.getContext().authentication.principal as Long
+        val activities = stravaService.getRecentActivities(userId = userId, perPage = limit, page = page)
             .map { stravaService.toActivitySummary(it) }
         return ResponseEntity.ok(activities)
     }
 
     @GetMapping("/stats")
     fun getWeeklyStats(): ResponseEntity<Map<String, Any>> {
-        val activities = stravaService.getRecentActivities(perPage = 100)
+        val userId = SecurityContextHolder.getContext().authentication.principal as Long
+        val activities = stravaService.getRecentActivities(userId = userId, perPage = 100)
 
         val bogotaToday = LocalDate.now(ZoneId.of("America/Bogota"))
         val weekStart = bogotaToday.with(DayOfWeek.MONDAY)
@@ -183,7 +186,7 @@ class ActivitiesController(
     @PostMapping("/resync")
     fun resyncActivities(): ResponseEntity<Map<String, Int>> {
         val userId = SecurityContextHolder.getContext().authentication.principal as Long
-        val stravaActivities = stravaService.getRecentActivities(perPage = 100)
+        val stravaActivities = stravaService.getRecentActivities(userId = userId, perPage = 100)
 
         var inserted = 0
         var updated = 0
@@ -207,9 +210,9 @@ class ActivitiesController(
         val userId = SecurityContextHolder.getContext().authentication.principal as Long
         val latest = activityRepository.findRecentByUserId(userId, 1).firstOrNull()
         val stravaActivities = if (latest != null) {
-            stravaService.getActivitiesSince(latest.startDate.epochSecond)
+            stravaService.getActivitiesSince(latest.startDate.epochSecond, userId)
         } else {
-            stravaService.getRecentActivities(perPage = 100)
+            stravaService.getRecentActivities(userId = userId, perPage = 100)
         }
         val activities = stravaActivities.map { stravaService.toActivity(it, userId) }
         activityRepository.saveAll(activities)
@@ -218,7 +221,7 @@ class ActivitiesController(
         val zonesUpdated = activityRepository
             .findRecentByUserId(userId, 5)
             .count { recent ->
-                val json = stravaService.getActivityZones(recent.stravaId)
+                val json = stravaService.getActivityZones(recent.stravaId, userId)
                 if (json != null) {
                     activityZonesRepository.save(
                         ActivityZones(
@@ -255,7 +258,7 @@ class ActivitiesController(
 
         loop@ while (true) {
             val batch: List<com.strideai.dto.StravaActivityDto> = try {
-                stravaService.fetchPageForBackfill(page = page, perPage = 200)
+                stravaService.fetchPageForBackfill(userId = userId, page = page, perPage = 200)
             } catch (e: RuntimeException) {
                 if (e.message == "STRAVA_RATE_LIMITED") {
                     logger.warn("Backfill: Strava rate limit hit on page $page — stopping early")
